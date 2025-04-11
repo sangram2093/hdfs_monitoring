@@ -161,6 +161,47 @@ def get_upcoming_cycle(tmp_path):
     
     return upcoming_date_str
 
+def normalize_path(p: str) -> str:
+    """
+    Returns a normalized path string without trailing slash (except if it's root '/').
+    Example:
+      /user/sangram/ -> /user/sangram
+      /user/sangram  -> /user/sangram
+      / -> /
+    """
+    if p == "/":
+        return "/"
+    return p.rstrip("/")
+
+def is_path_excluded(path: str, exclusion_list: set) -> bool:
+    """
+    Returns True if the given path is in or *under* any entry from exclusion_list.
+    We interpret any entry that is a directory path to exclude all sub-items.
+    
+    For each exclusion E in the set:
+      - If path == E, exclude
+      - If path starts with E + "/", exclude
+    """
+    norm_path = normalize_path(path)
+
+    for excl in exclusion_list:
+        norm_excl = normalize_path(excl)
+        # If exactly matches
+        if norm_path == norm_excl:
+            return True
+        # If path starts with 'excl + /' ... exclude
+        # e.g. path "/user/sangram/sample.txt" starts with "/user/sangram/" 
+        # if norm_excl = "/user/sangram"
+        if norm_excl != "/" and norm_path.startswith(norm_excl + "/"):
+            return True
+        
+        # Special case: if the exclusion is "/" then everything is excluded
+        # but presumably you never want that unless you want to exclude the entire cluster.
+        if norm_excl == "/" and norm_path.startswith("/"):
+            return True
+    
+    return False
+
 def main():
     config = load_config()
     threshold_days = config["threshold_days"]
@@ -199,10 +240,22 @@ def main():
             total_exclusion_set = exclusion_set.union(permanent_exclusion_set)
 
             # 4) final list = scheduled - total_exclusion
-            final_list = [f for f in scheduled_set if f not in total_exclusion_set]
+            final_list = [f for f in scheduled_set if not is_path_excluded(f, total_exclusions)]
 
             final_deletion_list_path = os.path.join(deletion_dir, f"final_deletion_list_{upcoming_cycle_str}.txt")
             write_file_list(final_list, final_deletion_list_path)
+
+            hdfs_final_deletion_list = f"hdfs:///tmp/final_deletion_list_{upcoming_cycle_str}.txt"
+            
+            # Use -f to overwrite if it exists
+            try:
+                subprocess.check_call([
+                    "hdfs", "dfs", "-put", "-f", final_deletion_list_path, hdfs_final_deletion_list
+                ])
+                print(f"Copied final deletion list to: {hdfs_final_deletion_list}")
+            except subprocess.CalledProcessError as e:
+                print(f"Error copying file to HDFS: {e}")
+                return 
 
             # Run Scala job
             run_scala_deletion_job(config, final_deletion_list_path)
