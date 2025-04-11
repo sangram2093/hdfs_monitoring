@@ -2,6 +2,9 @@ threshold_days: 150
 hdfs_base_path: "/path/to/monitor"
 temp_storage_path: "/home/edgeuser/hdfs_monitor"
 
+# The permanent exclusion file for important directories/files never to delete
+permanent_exclusion_file: "/home/edgeuser/hdfs_monitor/permanent_exclusions.txt"
+
 email:
   host: "smtp.example.com"
   port: 587
@@ -13,8 +16,8 @@ email:
     Hello Team,
 
     Please find attached the list of HDFS files scheduled for deletion in 4 days.
-    If you want to exclude any files, please do so via the Flask endpoint or manually
-    in the exclusions text file.
+    If you want to exclude any files, please update the exclusion file or use the
+    Flask endpoint.
 
     Thank you.
   from: "sender@example.com"
