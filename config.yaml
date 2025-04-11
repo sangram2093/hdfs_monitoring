@@ -1,0 +1,25 @@
+threshold_days: 150
+hdfs_base_path: "/path/to/monitor"
+temp_storage_path: "/home/edgeuser/hdfs_monitor"
+
+email:
+  host: "smtp.example.com"
+  port: 587
+  use_tls: true
+  username: "sender@example.com"
+  password: "YourPassword"
+  subject: "HDFS Deletion Alert"
+  body: |
+    Hello Team,
+
+    Please find attached the list of HDFS files scheduled for deletion in 4 days.
+    If you want to exclude any files, please do so via the Flask endpoint or manually
+    in the exclusions text file.
+
+    Thank you.
+  from: "sender@example.com"
+  to:
+    - "dev1@example.com"
+    - "dev2@example.com"
+  cc:
+    - "manager@example.com"
