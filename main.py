@@ -198,4 +198,61 @@ def main():
             # Optional: completion email
             completion_subject = f"HDFS Deletion Completed for {upcoming_cycle_str}"
             completion_body = (
-                f"Deletion completed for
+                f"Deletion completed for files scheduled on {upcoming_cycle_str}.\n"
+                f"Excluded files remain.\n"
+            )
+            send_email(
+                completion_subject,
+                completion_body,
+                config["email"]["to"],
+                cc=config["email"].get("cc"),
+                config=config
+            )
+            print("Deletion complete.")
+        
+        else:
+            # Not yet Deletion Day => send reminder
+            print(f"There are {days_left} day(s) left until the scheduled deletion on {upcoming_cycle_str}.")
+            reminder_subject = f"Reminder: {days_left} day(s) left for HDFS Deletion ({upcoming_cycle_str})"
+            reminder_body = (
+                f"There are {days_left} day(s) left until the scheduled HDFS deletion ({upcoming_cycle_str}).\n"
+                "If you need to exclude any files, please update the exclusion list.\n"
+            )
+            send_email(
+                reminder_subject,
+                reminder_body,
+                config["email"]["to"],
+                cc=config["email"].get("cc"),
+                config=config
+            )
+            print("Reminder email sent.")
+    
+    else:
+        # No future cycle found => Create a new cycle for (today + 4 days)
+        new_cycle_dt = datetime.now() + timedelta(days=4)
+        new_cycle_str = new_cycle_dt.strftime("%Y%m%d")
+        deletion_dir = os.path.join(tmp_path, f"scheduled_deletion_{new_cycle_str}")
+        os.makedirs(deletion_dir, exist_ok=True)
+
+        scheduled_file_list = os.path.join(deletion_dir, f"files_scheduled_{new_cycle_str}.txt")
+        exclusion_file_list = os.path.join(deletion_dir, f"exclusions_{new_cycle_str}.txt")
+
+        old_files = find_old_files(base_path, threshold_days)
+        write_file_list(old_files, scheduled_file_list)
+
+        # Send initial mail
+        subject = config["email"]["subject"]
+        body = config["email"]["body"]
+        send_email(
+            subject,
+            body,
+            config["email"]["to"],
+            cc=config["email"].get("cc"),
+            attachment=scheduled_file_list,
+            config=config
+        )
+        print(f"New cycle started for {new_cycle_str}. List emailed.")
+
+
+if __name__ == "__main__":
+    main()
