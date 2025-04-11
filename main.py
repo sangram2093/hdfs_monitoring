@@ -10,8 +10,10 @@ from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 
+# Regex to detect directories named "scheduled_deletion_YYYYmmdd"
+DATE_PATTERN = re.compile(r"^scheduled_deletion_(\d{8})$")
+
 CONFIG_FILE = "/path/to/config.yaml"
-DATE_PATTERN = re.compile(r"^scheduled_deletion_(\d{8})$")  # e.g. scheduled_deletion_20250414
 
 def load_config(config_file=CONFIG_FILE):
     with open(config_file, 'r') as f:
@@ -67,7 +69,8 @@ def send_email(subject, body, recipients, cc=None, attachment=None, config=None)
 
 def find_old_files(hdfs_base_path, threshold_days):
     """
-    Use the HDFS CLI to list files older than threshold_days.
+    Use the HDFS CLI to list files older than threshold_days within hdfs_base_path
+    and return as a Python list.
     """
     threshold_date = datetime.now() - timedelta(days=threshold_days)
     cmd = ["hdfs", "dfs", "-ls", "-R", hdfs_base_path]
@@ -82,6 +85,7 @@ def find_old_files(hdfs_base_path, threshold_days):
         parts = line.strip().split()
         if len(parts) < 8:
             continue
+        
         date_str = parts[5]
         time_str = parts[6]
         path_str = parts[7]
@@ -98,7 +102,7 @@ def find_old_files(hdfs_base_path, threshold_days):
 
 def write_file_list(file_paths, target_file):
     """
-    Writes a list of file paths to a text file.
+    Write file paths to a text file.
     """
     with open(target_file, 'w') as f:
         for p in file_paths:
@@ -106,7 +110,7 @@ def write_file_list(file_paths, target_file):
 
 def read_file_list(file_path):
     """
-    Reads file paths from a text file into a set.
+    Read file paths from a text file. Return as a set for quick membership checks.
     """
     if not os.path.exists(file_path):
         return set()
@@ -116,10 +120,9 @@ def read_file_list(file_path):
 
 def run_scala_deletion_job(config, deletion_list_path):
     """
-    Calls the Spark Scala job (e.g. spark-shell or spark-submit) to delete files.
+    Calls the Spark Scala job to delete files using the provided jar/class.
+    For a production flow, spark-submit is recommended.
     """
-    # Example using spark-submit:
-    # Or if you want spark-shell -i approach, see the notes below.
     scala_jar = "/path/to/HdfsDeletion.jar" 
     main_class = "HdfsDeletion"
     
@@ -139,9 +142,8 @@ def run_scala_deletion_job(config, deletion_list_path):
 
 def get_upcoming_cycle(tmp_path):
     """
-    Scan the temp_storage_path for directories named "scheduled_deletion_YYYYmmdd".
-    Return the earliest date (as string 'YYYYmmdd') that is >= today's date, 
-    or None if none found.
+    Scan temp_storage_path for directories named 'scheduled_deletion_YYYYmmdd'.
+    Return the earliest date string >= today's date, or None if none is found.
     """
     today = datetime.now().date()
     upcoming_date_str = None
@@ -151,7 +153,6 @@ def get_upcoming_cycle(tmp_path):
             cycle_date_str = match.group(1)  # e.g. '20250414'
             try:
                 cycle_date = datetime.strptime(cycle_date_str, "%Y%m%d").date()
-                # If it's in the future or exactly today, consider it
                 if cycle_date >= today:
                     if (upcoming_date_str is None) or (cycle_date < datetime.strptime(upcoming_date_str, "%Y%m%d").date()):
                         upcoming_date_str = cycle_date_str
@@ -166,29 +167,40 @@ def main():
     base_path      = config["hdfs_base_path"]
     tmp_path       = config["temp_storage_path"]
 
+    # A permanent exclusion file that developers cannot edit
+    permanent_exclusion_file = config.get("permanent_exclusion_file")
+
     # 1) Check if there's any existing scheduled_deletion_YYYYmmdd directory
-    #    that is >= today's date. If yes, we use that date. If no, we create a new cycle.
+    #    that is >= today's date. If yes, we use that cycle. If not, create new cycle.
     upcoming_cycle_str = get_upcoming_cycle(tmp_path)
-    today_date_str = datetime.now().strftime("%Y%m%d")
 
     if upcoming_cycle_str:
-        # There's an existing cycle for e.g. '20250414'
+        # There's an existing future cycle
         cycle_dt = datetime.strptime(upcoming_cycle_str, "%Y%m%d")
         days_left = (cycle_dt - datetime.now()).days
         
-        # Paths for scheduled + exclusion lists
+        # Directories and files for that cycle
         deletion_dir = os.path.join(tmp_path, f"scheduled_deletion_{upcoming_cycle_str}")
         scheduled_file_list = os.path.join(deletion_dir, f"files_scheduled_{upcoming_cycle_str}.txt")
         exclusion_file_list = os.path.join(deletion_dir, f"exclusions_{upcoming_cycle_str}.txt")
         
-        # If the cycle date is "today" or in the past, we treat it as deletion day
         if days_left <= 0:
-            # It's Deletion Day for that cycle
+            # Deletion Day
             print(f"Deletion day arrived for cycle {upcoming_cycle_str}. Running Scala-based deletion job.")
-            scheduled_set = read_file_list(scheduled_file_list)
-            exclusion_set = read_file_list(exclusion_file_list)
-            final_list = [f for f in scheduled_set if f not in exclusion_set]
             
+            scheduled_set = read_file_list(scheduled_file_list)
+            # 1) read dynamic per-cycle exclusions
+            exclusion_set = read_file_list(exclusion_file_list)
+            
+            # 2) read permanent exclusions
+            permanent_exclusion_set = read_file_list(permanent_exclusion_file) if permanent_exclusion_file else set()
+
+            # 3) union them
+            total_exclusion_set = exclusion_set.union(permanent_exclusion_set)
+
+            # 4) final list = scheduled - total_exclusion
+            final_list = [f for f in scheduled_set if f not in total_exclusion_set]
+
             final_deletion_list_path = os.path.join(deletion_dir, f"final_deletion_list_{upcoming_cycle_str}.txt")
             write_file_list(final_list, final_deletion_list_path)
 
@@ -228,14 +240,13 @@ def main():
             print("Reminder email sent.")
     
     else:
-        # No future cycle found => Create a new cycle for (today + 4 days)
+        # No future cycle => create a new one for (today + 4 days)
         new_cycle_dt = datetime.now() + timedelta(days=4)
         new_cycle_str = new_cycle_dt.strftime("%Y%m%d")
         deletion_dir = os.path.join(tmp_path, f"scheduled_deletion_{new_cycle_str}")
         os.makedirs(deletion_dir, exist_ok=True)
 
         scheduled_file_list = os.path.join(deletion_dir, f"files_scheduled_{new_cycle_str}.txt")
-        exclusion_file_list = os.path.join(deletion_dir, f"exclusions_{new_cycle_str}.txt")
 
         old_files = find_old_files(base_path, threshold_days)
         write_file_list(old_files, scheduled_file_list)
