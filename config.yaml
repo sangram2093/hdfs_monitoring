@@ -1,13 +1,16 @@
+# ========================= HDFS Settings =========================
 threshold_days_hdfs: 150
-hdfs_base_path: "/path/to/monitor_hdfs"
+hdfs_base_path: "/path/to/hdfs/monitor"
+temp_storage_path_hdfs: "/home/edgeuser/cleanup_framework/hdfs"
+permanent_exclusion_file_hdfs: "/home/edgeuser/cleanup_framework/permanent_exclusions_hdfs.txt"
 
+# ========================= Local Settings ========================
 threshold_days_local: 30
 local_base_path: "/var/log/myapp"
+temp_storage_path_local: "/home/edgeuser/cleanup_framework/local"
+permanent_exclusion_file_local: "/home/edgeuser/cleanup_framework/permanent_exclusions_local.txt"
 
-temp_storage_path: "/home/edgeuser/cleanup_framework"
-
-permanent_exclusion_file: "/home/edgeuser/cleanup_framework/permanent_exclusions.txt"
-
+# ========================= Shared Email Settings =================
 email:
   host: "smtp.example.com"
   port: 587
