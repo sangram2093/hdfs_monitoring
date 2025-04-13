@@ -1,18 +1,20 @@
+import os
+import io
+import re
+import yaml
+import zipfile
+import subprocess
+from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file
 from flask_cors import CORS
-import yaml
-import os
-import subprocess
-import zipfile
-import io
-import requests
-from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 app.secret_key = "some-random-secret-key"
 CORS(app)
 
 CONFIG_PATH = "config.yaml"
+
+DATE_PATTERN = re.compile(r"^scheduled_deletion_(\d{8})$")
 
 def load_config():
     if not os.path.exists(CONFIG_PATH):
@@ -24,45 +26,210 @@ def save_config(cfg):
     with open(CONFIG_PATH, "w") as f:
         yaml.dump(cfg, f, default_flow_style=False)
 
-# We'll load config once at startup. 
-# If you expect real-time changes, you might re-load for certain operations.
 config = load_config()
+
+# -------------- SCHEDULING LOGIC: FIND UPCOMING CYCLE ---------------
+def get_upcoming_cycle(tmp_path):
+    """
+    Looks for directories named 'scheduled_deletion_YYYYmmdd' in tmp_path,
+    returns the earliest date >= today, or None if none found.
+    """
+    if not os.path.exists(tmp_path):
+        return None
+
+    today = datetime.now().date()
+    upcoming_date_str = None
+
+    for entry in os.listdir(tmp_path):
+        match = DATE_PATTERN.match(entry)
+        if match:
+            cycle_date_str = match.group(1)  # e.g. "20250415"
+            try:
+                cycle_date = datetime.strptime(cycle_date_str, "%Y%m%d").date()
+                if cycle_date >= today:
+                    if (upcoming_date_str is None) or \
+                       (cycle_date < datetime.strptime(upcoming_date_str, "%Y%m%d").date()):
+                        upcoming_date_str = cycle_date_str
+            except ValueError:
+                pass
+    return upcoming_date_str
+
+# -------------- HDFS QUOTA LOGIC (hdfs dfs -count -q) ---------------
+def get_hdfs_quota_usage(path="/project/stadgcsv"):
+    """
+    Executes: hdfs dfs -count -q <path>  to get:
+        ns_quota ns_remaining space_quota space_used dir_count file_count ...
+    Example line:
+      200000 4726 17598478645673 14499787842345 52697 142577 1560987564123 /project/stadgcsv
+    We'll parse numeric fields, compute usage, and return a dict.
+    """
+    try:
+        output = subprocess.check_output(["hdfs", "dfs", "-count", "-q", path],
+                                         universal_newlines=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error running 'hdfs dfs -count -q': {e}")
+        return None
+
+    line = output.strip().split()
+    if len(line) < 8:
+        print(f"Unexpected output from hdfs dfs -count: {line}")
+        return None
+
+    ns_quota_str, ns_remain_str, space_quota_str, space_used_str, \
+    dir_count_str, file_count_str, unknown_str, location_str = line
+
+    try:
+        ns_quota = int(ns_quota_str)
+        ns_remaining = int(ns_remain_str)
+        space_quota = int(space_quota_str)
+        space_used = int(space_used_str)
+    except ValueError as e:
+        print(f"Error parsing numeric fields: {e}")
+        return None
+
+    ns_used = ns_quota - ns_remaining
+    ns_usage_pct = (ns_used / ns_quota) * 100 if ns_quota else 0
+
+    # Convert bytes to TB
+    TB_IN_BYTES = 1024 ** 4
+    space_quota_tb = space_quota / TB_IN_BYTES
+    space_used_tb = space_used / TB_IN_BYTES
+    space_usage_pct = (space_used / space_quota) * 100 if space_quota else 0
+
+    return {
+        "location": location_str,
+        "ns_quota": ns_quota,
+        "ns_used": ns_used,
+        "ns_pct": round(ns_usage_pct, 2),
+        "space_quota_tb": round(space_quota_tb, 2),
+        "space_used_tb": round(space_used_tb, 2),
+        "space_pct": round(space_usage_pct, 2),
+    }
+
+# -------------- LOCAL FS USAGE (df -h) ---------------
+def get_local_fs_usage(mount_points):
+    """
+    Return usage info for each mount as a list of tuples:
+      (mount_point, size, used, avail, use%)
+    from 'df -h <mount>'.
+    """
+    usage = []
+    for mp in mount_points:
+        if not os.path.exists(mp):
+            usage.append((mp, "Not found", "", "", ""))
+            continue
+        try:
+            cmd = ["df", "-h", mp]
+            output = subprocess.check_output(cmd).decode("utf-8", errors="replace").splitlines()
+            if len(output) >= 2:
+                # second line has the usage details
+                values = output[1].split()
+                # Typically: Filesystem, Size, Used, Avail, Use%, Mount
+                usage.append((mp, values[1], values[2], values[3], values[4]))
+            else:
+                usage.append((mp, "N/A", "N/A", "N/A", "N/A"))
+        except Exception as e:
+            usage.append((mp, f"Error: {e}", "", "", ""))
+    return usage
+
+# -------------- FLASK ROUTES ---------------
 
 @app.route("/")
 def index():
     """
-    Render a page with multiple tabs for:
-      1. Temp Exclusions
-      2. Versioned Directories
-      3. Path Search
-      4. File Download
-      5. Local FS Quota
-      6. HDFS Quota
+    Home page:
+      1) Display next upcoming deletion date for HDFS and local.
+      2) Display HDFS + Local usage/quota info.
+      3) Provide links to download scheduled file if it exists.
+      4) Provide nav tabs to other functionalities (temp, versioned, search, etc.)
     """
-    # We'll gather local usage data for /apps/trade-srv, /tmp, /opt
-    local_fs_usage = get_local_fs_usage(config.get("local_mount_points", []))
-    
-    # We'll gather HDFS usage data by scraping (if we can)
-    hdfs_usage_data = get_hdfs_usage_data(config.get("hdfs_usage_url"), config.get("hdfs_quota_location"))
+    # 1) Next upcoming cycle for HDFS
+    tmp_path_hdfs = config.get("temp_storage_path_hdfs")
+    upcoming_date_hdfs = get_upcoming_cycle(tmp_path_hdfs) if tmp_path_hdfs else None
 
-    return render_template("index.html",
-                           config=config,
-                           local_fs_usage=local_fs_usage,
-                           hdfs_usage_data=hdfs_usage_data)
+    # 2) Next upcoming cycle for Local
+    tmp_path_local = config.get("temp_storage_path_local")
+    upcoming_date_local = get_upcoming_cycle(tmp_path_local) if tmp_path_local else None
+
+    # 3) HDFS quota usage
+    hdfs_loc = config.get("hdfs_quota_location", "/project/stadgcsv")
+    hdfs_usage_data = get_hdfs_quota_usage(hdfs_loc)
+
+    # 4) Local FS usage
+    local_mount_points = config.get("local_mount_points", [])
+    local_fs_usage = get_local_fs_usage(local_mount_points)
+
+    # We'll pass these to the template
+    return render_template(
+        "index.html",
+        upcoming_date_hdfs=upcoming_date_hdfs,
+        upcoming_date_local=upcoming_date_local,
+        hdfs_usage_data=hdfs_usage_data,
+        local_fs_usage=local_fs_usage,
+        config=config
+    )
+
+@app.route("/download_scheduled_file", methods=["GET"])
+def download_scheduled_file():
+    """
+    Download the "actual deletion" file (files_scheduled_<date>.txt) for next upcoming cycle,
+    as a zipped file. We accept ?mode=hdfs or ?mode=local
+    """
+    mode = request.args.get("mode")
+    if not mode:
+        flash("Missing mode for scheduled file download.", "error")
+        return redirect(url_for("index"))
+
+    if mode == "hdfs":
+        tmp_path = config.get("temp_storage_path_hdfs")
+    else:
+        tmp_path = config.get("temp_storage_path_local")
+
+    if not tmp_path:
+        flash(f"No tmp path found in config for {mode}.", "error")
+        return redirect(url_for("index"))
+
+    # Find the upcoming date
+    cycle_date_str = get_upcoming_cycle(tmp_path)
+    if not cycle_date_str:
+        flash(f"No upcoming cycle found for {mode}.", "error")
+        return redirect(url_for("index"))
+
+    # Build the path to files_scheduled_<date>.txt
+    scheduled_dir = os.path.join(tmp_path, f"scheduled_deletion_{cycle_date_str}")
+    scheduled_file = os.path.join(scheduled_dir, f"files_scheduled_{cycle_date_str}.txt")
+
+    if not os.path.exists(scheduled_file):
+        flash(f"Scheduled file does not exist: {scheduled_file}", "error")
+        return redirect(url_for("index"))
+
+    # Zip in-memory
+    import io
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.write(scheduled_file, arcname=os.path.basename(scheduled_file))
+    zip_buffer.seek(0)
+
+    zip_filename = f"files_scheduled_{cycle_date_str}_{mode}.zip"
+    return send_file(
+        zip_buffer,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=zip_filename
+    )
+
+# ----- Existing routes for Tab functionalities -----
 
 @app.route("/add_temp_exclusions", methods=["POST"])
 def add_temp_exclusions():
-    """
-    Append lines to the relevant temp exclusion file: hdfs or local
-    depending on user's selection in the form.
-    """
+    """Append lines to temp_exclusion_file_(hdfs/local)."""
     lines = request.form.get("exclusionLines", "").strip().splitlines()
-    mode = request.form.get("mode")  # "hdfs" or "local"
-    
+    mode = request.form.get("mode", "")  # "hdfs" or "local"
+
     if not lines or not mode:
-        flash("Missing lines or mode.", "error")
+        flash("Missing lines or mode for temp exclusions.", "error")
         return redirect(url_for("index"))
-    
+
     if mode == "hdfs":
         temp_file = config.get("temp_exclusion_file_hdfs")
     else:
@@ -86,14 +253,12 @@ def add_temp_exclusions():
 
 @app.route("/add_versioned_directories", methods=["POST"])
 def add_versioned_directories():
-    """
-    Append lines to the relevant versioned_dirs file (hdfs or local).
-    """
+    """Append lines to versioned_dirs_(hdfs/local)."""
     lines = request.form.get("versionedLines", "").strip().splitlines()
-    mode = request.form.get("mode")  # "hdfs" or "local"
+    mode = request.form.get("mode", "")
 
     if not lines or not mode:
-        flash("Missing lines or mode.", "error")
+        flash("Missing lines or mode for versioned dirs.", "error")
         return redirect(url_for("index"))
 
     if mode == "hdfs":
@@ -119,80 +284,69 @@ def add_versioned_directories():
 
 @app.route("/search_path", methods=["POST"])
 def search_path():
-    """
-    Search for a path in the chosen file (temp or versioned, hdfs or local).
-    """
+    """Search for exact match line in either temp or versioned file for hdfs/local."""
     search_term = request.form.get("searchTerm", "").strip()
-    file_type   = request.form.get("fileType")    # "temp" or "versioned"
-    mode        = request.form.get("mode")        # "hdfs" or "local"
-    
+    file_type   = request.form.get("fileType")   # "temp" or "versioned"
+    mode        = request.form.get("mode")       # "hdfs" or "local"
+
     if not search_term or not file_type or not mode:
         flash("Missing searchTerm, fileType, or mode.", "error")
         return redirect(url_for("index"))
 
-    # Decide which file to search
     if file_type == "temp":
-        if mode == "hdfs":
-            file_path = config.get("temp_exclusion_file_hdfs")
-        else:
-            file_path = config.get("temp_exclusion_file_local")
+        fp = config["temp_exclusion_file_hdfs"] if mode=="hdfs" else config["temp_exclusion_file_local"]
     else:
-        # versioned
-        if mode == "hdfs":
-            file_path = config.get("versioned_dirs_hdfs")
-        else:
-            file_path = config.get("versioned_dirs_local")
+        fp = config["versioned_dirs_hdfs"] if mode=="hdfs" else config["versioned_dirs_local"]
 
-    if not file_path or not os.path.exists(file_path):
-        flash(f"File not found: {file_path}", "error")
+    if not os.path.exists(fp):
+        flash(f"File not found: {fp}", "error")
         return redirect(url_for("index"))
 
     found = False
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(fp, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip() == search_term:
                 found = True
                 break
     
     if found:
-        flash(f"'{search_term}' found in {file_path}.", "success")
+        flash(f"'{search_term}' found in {fp}.", "success")
     else:
-        flash(f"'{search_term}' NOT found in {file_path}.", "info")
+        flash(f"'{search_term}' NOT found in {fp}.", "info")
     
     return redirect(url_for("index"))
 
 @app.route("/download_file", methods=["GET"])
 def download_file():
     """
-    Provide a download link that, given some query parameters, 
-    zips the target file and returns it.
+    Zip the chosen file (temp or versioned, hdfs or local) in-memory
+    and prompt user to download it.
     e.g. /download_file?fileType=temp&mode=local
     """
-    file_type = request.args.get("fileType")  # "temp" or "versioned"
-    mode      = request.args.get("mode")      # "hdfs" or "local"
+    file_type = request.args.get("fileType")
+    mode      = request.args.get("mode")
 
     if not file_type or not mode:
-        flash("Missing fileType or mode.", "error")
+        flash("Missing fileType or mode for file download.", "error")
         return redirect(url_for("index"))
     
-    # Decide which actual file
     if file_type == "temp":
         fp = config["temp_exclusion_file_hdfs"] if mode=="hdfs" else config["temp_exclusion_file_local"]
     else:
         # versioned
         fp = config["versioned_dirs_hdfs"] if mode=="hdfs" else config["versioned_dirs_local"]
-    
+
     if not os.path.exists(fp):
         flash(f"File does not exist: {fp}", "error")
         return redirect(url_for("index"))
 
-    # We'll zip it in-memory
+    # Zip in-memory
+    import io
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.write(fp, arcname=os.path.basename(fp))
     zip_buffer.seek(0)
 
-    # Return as file download
     zip_filename = os.path.basename(fp) + ".zip"
     return send_file(
         zip_buffer,
@@ -201,85 +355,5 @@ def download_file():
         download_name=zip_filename
     )
 
-# ------------------ Utility Functions for Disk & HDFS Usage ------------------
-
-def get_local_fs_usage(mount_points):
-    """
-    Return usage info for each mount in a dict.
-    We'll call `df -h <mount>` and parse the output.
-    """
-    usage = []
-    for mp in mount_points:
-        if not os.path.exists(mp):
-            usage.append((mp, "Not found", "", "", ""))
-            continue
-        try:
-            # We'll run `df -h` for the mount
-            cmd = ["df", "-h", mp]
-            output = subprocess.check_output(cmd).decode("utf-8", errors="replace").splitlines()
-            # output might look like:
-            # Filesystem Size Used Avail Use% Mounted on
-            # /dev/sda1  30G  25G  5G   83% /apps/trade-srv
-            if len(output) >= 2:
-                headers = output[0].split()
-                values  = output[1].split()
-                # Typically something like: [Filesystem, Size, Used, Avail, Use%, Mounted on]
-                # We'll store (Size, Used, Avail, Use%)
-                usage.append((mp, values[1], values[2], values[3], values[4]))
-            else:
-                usage.append((mp, "N/A", "N/A", "N/A", "N/A"))
-        except Exception as e:
-            usage.append((mp, f"Error: {e}", "", "", ""))
-    return usage
-
-def get_hdfs_usage_data(url, target_location):
-    """
-    Scrape the webpage (like the user’s example) to find 
-    usage row for 'target_location'. Return 
-    (location, ns_quota, ns_used, ns_pct, space_quota, space_used, space_pct)
-    or None if not found.
-    """
-    if not url or not target_location:
-        return None
-    
-    try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code != 200:
-            return None
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(resp.content, 'html.parser')
-        table = soup.find(name='table', attrs={'align': 'CENTER', 'width': '99%'})
-        if not table:
-            return None
-        
-        target_row = None
-        for row in table.find_all('tr'):
-            cells = row.find_all('td')
-            if cells and cells[0].text.strip() == target_location:
-                target_row = [c.text.strip() for c in cells]
-                break
-        
-        if not target_row:
-            return None
-        
-        # Suppose the row is:
-        # [ /project/stadgcsv,
-        #   200000, 100000, 97.63,
-        #   16384.00, 2880.57, 17.58 ]
-        # We'll just return it as a tuple or dict
-        return {
-            "location": target_row[0],
-            "ns_quota": target_row[1],
-            "ns_used": target_row[2],
-            "ns_pct": target_row[3],
-            "space_quota": target_row[4],
-            "space_used": target_row[5],
-            "space_pct": target_row[6],
-        }
-    except Exception as e:
-        print(f"Error fetching HDFS usage: {e}")
-        return None
-
 if __name__ == "__main__":
-    # For dev only
     app.run(host="0.0.0.0", port=5000, debug=True)
