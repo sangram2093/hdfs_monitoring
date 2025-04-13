@@ -2,25 +2,18 @@
 threshold_days_hdfs: 150
 hdfs_base_path: "/path/to/hdfs/monitor"
 temp_storage_path_hdfs: "/home/edgeuser/cleanup_framework/hdfs"
-
-# This file is updated only by admin. Anything in here is never scanned.
 permanent_exclusion_file_hdfs: "/home/edgeuser/cleanup_framework/permanent_exclusions_hdfs.txt"
-
-# This file can be updated by users over the 4-day grace period. We'll apply it only at the day of deletion.
 temp_exclusion_file_hdfs: "/home/edgeuser/cleanup_framework/temp_exclusions_hdfs.txt"
-
 
 # ========================= Local Settings ========================
 threshold_days_local: 30
 local_base_path: "/var/log/myapp"
 temp_storage_path_local: "/home/edgeuser/cleanup_framework/local"
-
-# Admin-managed
 permanent_exclusion_file_local: "/home/edgeuser/cleanup_framework/permanent_exclusions_local.txt"
-
-# User-managed for ephemeral excludes
 temp_exclusion_file_local: "/home/edgeuser/cleanup_framework/temp_exclusions_local.txt"
 
+# This file lists local directories that contain version subdirectories – only the highest version is kept, older versions are deleted.
+versioned_dirs_local: "/home/edgeuser/cleanup_framework/versioned_dirs_local.txt"
 
 # ========================= Shared Email Settings =================
 email:
@@ -35,7 +28,7 @@ email:
 
     Please find attached the list of files scheduled for deletion in 4 days.
     If you need to exclude any files, please update the temp exclusion file
-    or the dynamic per-cycle exclusion file (exclusions_YYYYmmdd.txt).
+    or the dynamic per-cycle exclusion file.
 
     Thank you.
   from: "sender@example.com"
