@@ -20,7 +20,7 @@ DATE_PATTERN = re.compile(r"^scheduled_deletion_(\d{8})$")
 
 
 # ========================================================================
-#                            CONFIG & EMAIL UTILS
+#                           CONFIG & EMAIL UTILS
 # ========================================================================
 
 def load_config(config_file):
@@ -33,8 +33,7 @@ def load_config(config_file):
 
 def send_email(subject, body, recipients, cc=None, attachment=None, config=None):
     """
-    Sends an email with optional attachment (now a ZIP) using SMTP server details from config.
-    If 'attachment' is given, it should be the path to the .zip file you want to attach.
+    Sends an email with optional attachment (as a zip or any file) using SMTP server details from config.
     """
     if config is None:
         raise ValueError("SMTP config required to send email.")
@@ -46,7 +45,7 @@ def send_email(subject, body, recipients, cc=None, attachment=None, config=None)
         msg["Cc"] = ", ".join(cc)
     msg["Subject"] = subject
     
-    # Body
+    # Email Body
     msg.attach(MIMEText(body, "plain"))
 
     # Attachment
@@ -82,12 +81,12 @@ def send_email(subject, body, recipients, cc=None, attachment=None, config=None)
 
 
 # ========================================================================
-#                          EXCLUSION & PATH UTILS
+#                           EXCLUSION & PATH UTILS
 # ========================================================================
 
 def normalize_path(p: str) -> str:
     """
-    Remove trailing slash except if p == '/'.
+    Removes trailing slash except if p == '/'.
     """
     if p == "/":
         return "/"
@@ -99,19 +98,17 @@ def is_path_excluded(path: str, exclusion_list: set) -> bool:
     Returns True if 'path' should be excluded because:
       - exactly matches an exclusion entry,
       - or is under an excluded directory.
-    E.g., if '/user/sangram' is excluded, then
-    '/user/sangram/sample.txt' is also excluded.
+    Example:
+      If '/user/sangram' is excluded, then
+      '/user/sangram/sample.txt' is also excluded.
     """
     norm_path = normalize_path(path)
     for excl in exclusion_list:
         norm_excl = normalize_path(excl)
-        # Exact match
         if norm_path == norm_excl:
             return True
-        # If the path starts with 'excluded_dir + "/"'
         if norm_excl != "/" and norm_path.startswith(norm_excl + "/"):
             return True
-        # If exclusion is '/', everything is excluded
         if norm_excl == "/" and norm_path.startswith("/"):
             return True
     return False
@@ -120,6 +117,7 @@ def is_path_excluded(path: str, exclusion_list: set) -> bool:
 def read_file_list(file_path):
     """
     Reads file paths from a text file into a set.
+    Uses 'replace' to avoid surrogate encoding errors.
     """
     if not os.path.exists(file_path):
         return set()
@@ -144,6 +142,7 @@ def get_upcoming_cycle(tmp_path):
     """
     today = datetime.now().date()
     upcoming_date_str = None
+
     if not os.path.exists(tmp_path):
         return None
 
@@ -164,22 +163,24 @@ def get_upcoming_cycle(tmp_path):
 def zip_file(original_file):
     """
     Zips the given file and returns the path to the created .zip.
-    If original_file = '/path/to/my.txt', the zip will be '/path/to/my.txt.zip'
+    e.g. if original_file = '/path/to/my.txt', we create '/path/to/my.txt.zip'
     """
     zip_path = original_file + ".zip"
+    import zipfile
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.write(original_file, arcname=os.path.basename(original_file))
     return zip_path
 
 
 # ========================================================================
-#                          HDFS MODE LOGIC
+#                           HDFS MODE LOGIC
 # ========================================================================
 
 def find_old_files_hdfs(hdfs_base_path, threshold_days, perm_exclusions):
     """
-    Use 'hdfs dfs -ls -R' to list all paths. Skip any that are excluded (by prefix),
-    and keep only those older than threshold_days.
+    Use 'hdfs dfs -ls -R' to list all paths. 
+    Skip permanent_exclusions so they're never scheduled. 
+    Keep only those older than threshold_days.
     """
     threshold_date = datetime.now() - timedelta(days=threshold_days)
     cmd = ["hdfs", "dfs", "-ls", "-R", hdfs_base_path]
@@ -198,7 +199,7 @@ def find_old_files_hdfs(hdfs_base_path, threshold_days, perm_exclusions):
         time_str = parts[6]
         path_str = parts[7]
 
-        # Skip if path is permanently excluded
+        # Skip if permanently excluded
         if is_path_excluded(path_str, perm_exclusions):
             continue
 
@@ -238,7 +239,7 @@ def hdfs_deletion_workflow(config, final_list, local_final_path, hdfs_final_dele
     """
     1) Write final_list to local file
     2) If the HDFS file exists, remove it
-    3) put the local file to HDFS
+    3) put local file to HDFS
     4) run spark-submit
     """
     # 1) Write local
@@ -265,26 +266,27 @@ def hdfs_deletion_workflow(config, final_list, local_final_path, hdfs_final_dele
 
 
 # ========================================================================
-#                          LOCAL MODE LOGIC
+#                           LOCAL MODE LOGIC
 # ========================================================================
 
 def find_old_files_local(local_base_path, threshold_days, perm_exclusions):
     """
     Recursively find files older than threshold_days on local filesystem,
-    skipping anything in perm_exclusions.
+    skipping anything in perm_exclusions so they're never scheduled.
     """
     cutoff_time = datetime.now().timestamp() - (threshold_days * 86400)
     old_files = []
 
     for root, dirs, files in os.walk(local_base_path):
-        # If 'root' is excluded, skip entire sub-tree
+        # If root is permanently excluded, skip entire sub-tree
         if is_path_excluded(root, perm_exclusions):
-            # skip scanning this directory (including subdirs)
-            dirs[:] = []
+            dirs[:] = []  # no recursion into subfolders
             continue
 
         for fname in files:
             full_path = os.path.join(root, fname)
+
+            # skip if permanently excluded
             if is_path_excluded(full_path, perm_exclusions):
                 continue
 
@@ -325,7 +327,7 @@ def local_deletion_workflow(final_list, local_final_path):
 
 
 # ========================================================================
-#                          MAIN SCHEDULING LOGIC
+#                           MAIN SCHEDULING LOGIC
 # ========================================================================
 
 def main():
@@ -338,34 +340,40 @@ def main():
     # 2) Load config
     config = load_config(args.config)
 
-    # 3) Depending on mode, pick paths & threshold
+    # 3) Depending on mode, pick relevant paths & threshold
     if args.mode == "hdfs":
         threshold_days = config["threshold_days_hdfs"]
         base_path      = config["hdfs_base_path"]
         tmp_path       = config["temp_storage_path_hdfs"]
-        perm_exclusion_file = config["permanent_exclusion_file_hdfs"]
+
+        permanent_exclusion_file = config["permanent_exclusion_file_hdfs"]
+        temp_exclusion_file      = config["temp_exclusion_file_hdfs"]
+
     else:
         threshold_days = config["threshold_days_local"]
         base_path      = config["local_base_path"]
         tmp_path       = config["temp_storage_path_local"]
-        perm_exclusion_file = config["permanent_exclusion_file_local"]
 
-    # Read permanent exclusions
-    permanent_exclusions = read_file_list(perm_exclusion_file)
+        permanent_exclusion_file = config["permanent_exclusion_file_local"]
+        temp_exclusion_file      = config["temp_exclusion_file_local"]
+
+    # Read permanent exclusions (admin-managed)
+    permanent_exclusions = read_file_list(permanent_exclusion_file)
 
     # 4) Check if there's an upcoming cycle
     upcoming_cycle_str = get_upcoming_cycle(tmp_path)
 
     if not upcoming_cycle_str:
-        # -- Create a new cycle for (today + 4 days)
+        # ---------- Create a new cycle for (today + 4 days) ----------
         new_cycle_dt = datetime.now() + timedelta(days=4)
         new_cycle_str = new_cycle_dt.strftime("%Y%m%d")
+
         deletion_dir = os.path.join(tmp_path, f"scheduled_deletion_{new_cycle_str}")
         os.makedirs(deletion_dir, exist_ok=True)
 
         scheduled_file_list = os.path.join(deletion_dir, f"files_scheduled_{new_cycle_str}.txt")
 
-        # Find old files (skipping permanent exclusions)
+        # => find old files, skipping permanent exclusions at scan time
         if args.mode == "hdfs":
             old_files = find_old_files_hdfs(base_path, threshold_days, permanent_exclusions)
         else:
@@ -374,27 +382,30 @@ def main():
         # Write them
         write_file_list(old_files, scheduled_file_list)
 
-        # ==> Zip it
-        zip_path = zip_file(scheduled_file_list)
+        # Optionally zip the scheduled file if you want to email a zip
+        # Or skip zipping if you prefer raw text
+        zipped_path = scheduled_file_list + ".zip"
+        with zipfile.ZipFile(zipped_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(scheduled_file_list, arcname=os.path.basename(scheduled_file_list))
 
         # Send initial mail with the .zip attached
-        subject = config["email"]["subject"]
-        body    = config["email"]["body"]
+        subject    = config["email"]["subject"]
+        body       = config["email"]["body"]
         recipients = config["email"]["to"]
-        cc       = config["email"].get("cc")
+        cc         = config["email"].get("cc")
 
         send_email(
             subject,
             body,
             recipients,
             cc=cc,
-            attachment=zip_path,
+            attachment=zipped_path,
             config=config
         )
         print(f"New cycle started for {new_cycle_str} in mode: {args.mode}. List emailed (zipped).")
 
     else:
-        # We have a future cycle
+        # ---------- We have a future cycle ----------
         cycle_dt = datetime.strptime(upcoming_cycle_str, "%Y%m%d")
         days_left = (cycle_dt - datetime.now()).days
 
@@ -403,14 +414,23 @@ def main():
         exclusion_file_list = os.path.join(deletion_dir, f"exclusions_{upcoming_cycle_str}.txt")
 
         if days_left <= 0:
-            # -- DELETION DAY --
+            # ========== DELETION DAY ==========
             scheduled_set = read_file_list(scheduled_file_list)
-            dynamic_exclusions = read_file_list(exclusion_file_list)
-            # Combine permanent + dynamic
-            total_exclusions = dynamic_exclusions.union(permanent_exclusions)
 
-            # Build final list
-            final_list = [p for p in scheduled_set if not is_path_excluded(p, total_exclusions)]
+            # "Dynamic" cycle-based exclusions:
+            dynamic_exclusions = read_file_list(exclusion_file_list)
+
+            # "Temp" user exclusions (for next cycle only), also read at deletion time:
+            temp_exclusions = read_file_list(temp_exclusion_file)
+
+            # permanent_exclusions were already removed at scanning,
+            # so we don't re-check them here. They never made it to scheduled_set.
+
+            # Final exclusion set = dynamic + temp
+            final_exclusions = dynamic_exclusions.union(temp_exclusions)
+
+            # Build final list to delete
+            final_list = [p for p in scheduled_set if not is_path_excluded(p, final_exclusions)]
 
             local_final_deletion_list = os.path.join(deletion_dir, f"final_deletion_list_{upcoming_cycle_str}.txt")
 
@@ -439,11 +459,12 @@ def main():
             print("Deletion complete.")
 
         else:
-            # -- REMINDER --
+            # ========== REMINDER ==========
             reminder_subject = f"Reminder: {days_left} day(s) left for Deletion ({upcoming_cycle_str}, {args.mode})"
             reminder_body = (
                 f"There are {days_left} day(s) left until scheduled deletion on {upcoming_cycle_str}.\n"
-                "If you need to exclude any files, please update the exclusion list.\n"
+                "If you need to exclude any files for this cycle, please update the dynamic per-cycle file or "
+                "the temp exclusion file.\n"
             )
             recipients = config["email"]["to"]
             cc         = config["email"].get("cc")
