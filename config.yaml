@@ -21,8 +21,9 @@ local_mount_points:
   - "/tmp"
   - "/opt"
 
-# The location we want, e.g. "/project/stadgcsv"
-hdfs_quota_location: "/project/stadgcsv"
+hdfs_quota_paths:
+  - "/project/stadgcsv"
+  - "/project/someOtherPath"
 
 # ========================= Shared Email Settings =================
 email:
