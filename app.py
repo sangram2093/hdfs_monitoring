@@ -28,7 +28,7 @@ def save_config(cfg):
 
 config = load_config()
 
-# -------------- SCHEDULING LOGIC: FIND UPCOMING CYCLE ---------------
+# ------------------ SCHEDULING LOGIC: FIND UPCOMING CYCLE ------------------
 def get_upcoming_cycle(tmp_path):
     """
     Looks for directories named 'scheduled_deletion_YYYYmmdd' in tmp_path,
@@ -47,19 +47,19 @@ def get_upcoming_cycle(tmp_path):
             try:
                 cycle_date = datetime.strptime(cycle_date_str, "%Y%m%d").date()
                 if cycle_date >= today:
-                    if (upcoming_date_str is None) or \
-                       (cycle_date < datetime.strptime(upcoming_date_str, "%Y%m%d").date()):
+                    if (upcoming_date_str is None) or (cycle_date < datetime.strptime(upcoming_date_str, "%Y%m%d").date()):
                         upcoming_date_str = cycle_date_str
             except ValueError:
                 pass
     return upcoming_date_str
 
-# -------------- HDFS QUOTA LOGIC (hdfs dfs -count -q) ---------------
-def get_hdfs_quota_usage(path="/project/stadgcsv"):
+# ------------------ HDFS QUOTA LOGIC (hdfs dfs -count -q) ------------------
+
+def get_hdfs_quota_usage(path):
     """
-    Executes: hdfs dfs -count -q <path>  to get:
-        ns_quota ns_remaining space_quota space_used dir_count file_count ...
-    Example line:
+    Executes: hdfs dfs -count -q <path> to get:
+        ns_quota ns_remaining space_quota space_used dir_count file_count unknown location
+    Example:
       200000 4726 17598478645673 14499787842345 52697 142577 1560987564123 /project/stadgcsv
     We'll parse numeric fields, compute usage, and return a dict.
     """
@@ -72,7 +72,7 @@ def get_hdfs_quota_usage(path="/project/stadgcsv"):
 
     line = output.strip().split()
     if len(line) < 8:
-        print(f"Unexpected output from hdfs dfs -count: {line}")
+        print(f"Unexpected output from hdfs dfs -count for {path}: {line}")
         return None
 
     ns_quota_str, ns_remain_str, space_quota_str, space_used_str, \
@@ -84,7 +84,7 @@ def get_hdfs_quota_usage(path="/project/stadgcsv"):
         space_quota = int(space_quota_str)
         space_used = int(space_used_str)
     except ValueError as e:
-        print(f"Error parsing numeric fields: {e}")
+        print(f"Error parsing numeric fields for {path}: {e}")
         return None
 
     ns_used = ns_quota - ns_remaining
@@ -106,7 +106,33 @@ def get_hdfs_quota_usage(path="/project/stadgcsv"):
         "space_pct": round(space_usage_pct, 2),
     }
 
-# -------------- LOCAL FS USAGE (df -h) ---------------
+def get_all_hdfs_quotas(paths):
+    """
+    For each path in 'paths', call get_hdfs_quota_usage and collect results in a list.
+    Return a list of dicts (or empty if none).
+    Each dict has keys: location, ns_quota, ns_used, ns_pct, space_quota_tb, space_used_tb, space_pct
+    or None if error.
+    """
+    results = []
+    for p in paths:
+        data = get_hdfs_quota_usage(p)
+        if data:
+            results.append(data)
+        else:
+            results.append({
+                "location": p,
+                "ns_quota": 0,
+                "ns_used": 0,
+                "ns_pct": 0,
+                "space_quota_tb": 0,
+                "space_used_tb": 0,
+                "space_pct": 0,
+                "error": True
+            })
+    return results
+
+# ------------------ LOCAL FS USAGE (df -h) ------------------
+
 def get_local_fs_usage(mount_points):
     """
     Return usage info for each mount as a list of tuples:
@@ -122,7 +148,7 @@ def get_local_fs_usage(mount_points):
             cmd = ["df", "-h", mp]
             output = subprocess.check_output(cmd).decode("utf-8", errors="replace").splitlines()
             if len(output) >= 2:
-                # second line has the usage details
+                # second line has usage details
                 values = output[1].split()
                 # Typically: Filesystem, Size, Used, Avail, Use%, Mount
                 usage.append((mp, values[1], values[2], values[3], values[4]))
@@ -132,41 +158,40 @@ def get_local_fs_usage(mount_points):
             usage.append((mp, f"Error: {e}", "", "", ""))
     return usage
 
-# -------------- FLASK ROUTES ---------------
+# ------------------ FLASK ROUTES ------------------
 
 @app.route("/")
 def index():
     """
     Home page:
       1) Display next upcoming deletion date for HDFS and local.
-      2) Display HDFS + Local usage/quota info.
-      3) Provide links to download scheduled file if it exists.
-      4) Provide nav tabs to other functionalities (temp, versioned, search, etc.)
+      2) Display HDFS usage in tabular form (for multiple paths from config).
+      3) Display local FS usage in table.
+      4) Provide links to download scheduled file if it exists.
+      5) Provide nav tabs to other functionalities (temp, versioned, search, etc.).
     """
-    # 1) Next upcoming cycle for HDFS
+    # Next upcoming HDFS cycle
     tmp_path_hdfs = config.get("temp_storage_path_hdfs")
     upcoming_date_hdfs = get_upcoming_cycle(tmp_path_hdfs) if tmp_path_hdfs else None
 
-    # 2) Next upcoming cycle for Local
+    # Next upcoming Local cycle
     tmp_path_local = config.get("temp_storage_path_local")
     upcoming_date_local = get_upcoming_cycle(tmp_path_local) if tmp_path_local else None
 
-    # 3) HDFS quota usage
-    hdfs_loc = config.get("hdfs_quota_location", "/project/stadgcsv")
-    hdfs_usage_data = get_hdfs_quota_usage(hdfs_loc)
+    # 1) HDFS usage for multiple paths
+    hdfs_paths = config.get("hdfs_quota_paths", [])
+    hdfs_usage_list = get_all_hdfs_quotas(hdfs_paths)
 
-    # 4) Local FS usage
-    local_mount_points = config.get("local_mount_points", [])
-    local_fs_usage = get_local_fs_usage(local_mount_points)
+    # 2) Local FS usage
+    mount_points = config.get("local_mount_points", [])
+    local_fs_usage = get_local_fs_usage(mount_points)
 
-    # We'll pass these to the template
     return render_template(
         "index.html",
         upcoming_date_hdfs=upcoming_date_hdfs,
         upcoming_date_local=upcoming_date_local,
-        hdfs_usage_data=hdfs_usage_data,
-        local_fs_usage=local_fs_usage,
-        config=config
+        hdfs_usage_list=hdfs_usage_list,
+        local_fs_usage=local_fs_usage
     )
 
 @app.route("/download_scheduled_file", methods=["GET"])
@@ -195,7 +220,6 @@ def download_scheduled_file():
         flash(f"No upcoming cycle found for {mode}.", "error")
         return redirect(url_for("index"))
 
-    # Build the path to files_scheduled_<date>.txt
     scheduled_dir = os.path.join(tmp_path, f"scheduled_deletion_{cycle_date_str}")
     scheduled_file = os.path.join(scheduled_dir, f"files_scheduled_{cycle_date_str}.txt")
 
@@ -224,7 +248,7 @@ def download_scheduled_file():
 def add_temp_exclusions():
     """Append lines to temp_exclusion_file_(hdfs/local)."""
     lines = request.form.get("exclusionLines", "").strip().splitlines()
-    mode = request.form.get("mode", "")  # "hdfs" or "local"
+    mode = request.form.get("mode", "")
 
     if not lines or not mode:
         flash("Missing lines or mode for temp exclusions.", "error")
@@ -341,7 +365,6 @@ def download_file():
         return redirect(url_for("index"))
 
     # Zip in-memory
-    import io
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.write(fp, arcname=os.path.basename(fp))
