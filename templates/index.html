@@ -1,7 +1,103 @@
 {% extends "layout.html" %}
 {% block content %}
 
-<!-- Bootstrap Nav Tabs -->
+<h3>Home Page</h3>
+
+<!-- 1) Upcoming Deletion Dates (HDFS & Local) -->
+<div class="row">
+  <div class="col-md-6">
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title">Upcoming Deletion (HDFS)</h5>
+        {% if upcoming_date_hdfs %}
+          <p>Next deletion date (HDFS): <strong>{{ upcoming_date_hdfs }}</strong></p>
+          <p>
+            <a href="{{ url_for('download_scheduled_file', mode='hdfs') }}" class="btn btn-sm btn-secondary">
+              Download Scheduled File (HDFS)
+            </a>
+          </p>
+        {% else %}
+          <p>No upcoming HDFS cycle found.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title">Upcoming Deletion (Local)</h5>
+        {% if upcoming_date_local %}
+          <p>Next deletion date (Local): <strong>{{ upcoming_date_local }}</strong></p>
+          <p>
+            <a href="{{ url_for('download_scheduled_file', mode='local') }}" class="btn btn-sm btn-secondary">
+              Download Scheduled File (Local)
+            </a>
+          </p>
+        {% else %}
+          <p>No upcoming Local cycle found.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 2) Quota Information (HDFS & Local) -->
+<div class="row">
+  <!-- HDFS usage data -->
+  <div class="col-md-6">
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title">HDFS Quota Usage</h5>
+        {% if hdfs_usage_data %}
+          <p><strong>Location:</strong> {{ hdfs_usage_data.location }}</p>
+          <p><strong>Namespace Quota:</strong> {{ hdfs_usage_data.ns_quota }}</p>
+          <p><strong>Namespace Used:</strong> {{ hdfs_usage_data.ns_used }}</p>
+          <p><strong>Namespace % Used:</strong> {{ hdfs_usage_data.ns_pct }}%</p>
+          <p><strong>Space Quota (TB):</strong> {{ hdfs_usage_data.space_quota_tb }}</p>
+          <p><strong>Space Used (TB):</strong> {{ hdfs_usage_data.space_used_tb }}</p>
+          <p><strong>Space % Used:</strong> {{ hdfs_usage_data.space_pct }}%</p>
+        {% else %}
+          <p>Could not fetch HDFS quota usage. Check path or command output.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  
+  <!-- Local FS usage -->
+  <div class="col-md-6">
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title">Local Filesystem Usage</h5>
+        <table class="table table-bordered">
+          <thead>
+            <tr>
+              <th>Mount Point</th>
+              <th>Size</th>
+              <th>Used</th>
+              <th>Avail</th>
+              <th>Use%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for mp, size, used, avail, pct in local_fs_usage %}
+              <tr>
+                <td>{{ mp }}</td>
+                <td>{{ size }}</td>
+                <td>{{ used }}</td>
+                <td>{{ avail }}</td>
+                <td>{{ pct }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr />
+
+<!-- TABS for other functionalities -->
 <ul class="nav nav-tabs" id="myTab" role="tablist">
   <li class="nav-item">
     <a class="nav-link active" id="tempExcl-tab" data-toggle="tab" href="#tempExcl" role="tab" aria-controls="tempExcl" aria-selected="true">
@@ -20,17 +116,7 @@
   </li>
   <li class="nav-item">
     <a class="nav-link" id="download-tab" data-toggle="tab" href="#download" role="tab" aria-controls="download" aria-selected="false">
-      Download Files
-    </a>
-  </li>
-  <li class="nav-item">
-    <a class="nav-link" id="localFs-tab" data-toggle="tab" href="#localFs" role="tab" aria-controls="localFs" aria-selected="false">
-      Local FS Usage
-    </a>
-  </li>
-  <li class="nav-item">
-    <a class="nav-link" id="hdfsUsage-tab" data-toggle="tab" href="#hdfsUsage" role="tab" aria-controls="hdfsUsage" aria-selected="false">
-      HDFS Usage
+      Download (Temp/Versioned)
     </a>
   </li>
 </ul>
@@ -38,7 +124,7 @@
 <div class="tab-content" id="myTabContent">
   <!-- Temp Exclusions -->
   <div class="tab-pane fade show active p-3" id="tempExcl" role="tabpanel" aria-labelledby="tempExcl-tab">
-    <h4>Temp Exclusions (HDFS / Local)</h4>
+    <h4>Add Temp Exclusions (HDFS / Local)</h4>
     <form action="{{ url_for('add_temp_exclusions') }}" method="POST">
       <div class="form-group">
         <label>Mode:</label>
@@ -48,7 +134,7 @@
         </select>
       </div>
       <div class="form-group">
-        <label>Paths to Append (one per line):</label>
+        <label>Paths (one per line):</label>
         <textarea name="exclusionLines" rows="5" class="form-control"></textarea>
       </div>
       <button type="submit" class="btn btn-primary">Add to Temp Exclusions</button>
@@ -57,7 +143,7 @@
 
   <!-- Versioned Directories -->
   <div class="tab-pane fade p-3" id="versionedDirs" role="tabpanel" aria-labelledby="versionedDirs-tab">
-    <h4>Versioned Directories (HDFS / Local)</h4>
+    <h4>Add Versioned Directories (HDFS / Local)</h4>
     <form action="{{ url_for('add_versioned_directories') }}" method="POST">
       <div class="form-group">
         <label>Mode:</label>
@@ -67,16 +153,16 @@
         </select>
       </div>
       <div class="form-group">
-        <label>Directories to Append (one per line):</label>
+        <label>Directories (one per line):</label>
         <textarea name="versionedLines" rows="5" class="form-control"></textarea>
       </div>
-      <button type="submit" class="btn btn-primary">Add to Versioned Directories</button>
+      <button type="submit" class="btn btn-primary">Add to Versioned Dirs</button>
     </form>
   </div>
 
   <!-- Path Search -->
   <div class="tab-pane fade p-3" id="searchPath" role="tabpanel" aria-labelledby="searchPath-tab">
-    <h4>Search Path in a File</h4>
+    <h4>Search Path in File</h4>
     <form action="{{ url_for('search_path') }}" method="POST">
       <div class="form-group">
         <label>Mode:</label>
@@ -93,16 +179,16 @@
         </select>
       </div>
       <div class="form-group">
-        <label>Search Term (Exact):</label>
+        <label>Search Term (Exact Match):</label>
         <input type="text" name="searchTerm" class="form-control" />
       </div>
       <button type="submit" class="btn btn-primary">Search</button>
     </form>
   </div>
 
-  <!-- Download Files -->
+  <!-- Download temp or versioned files -->
   <div class="tab-pane fade p-3" id="download" role="tabpanel" aria-labelledby="download-tab">
-    <h4>Download a File (as ZIP)</h4>
+    <h4>Download (Temp/Versioned) as ZIP</h4>
     <form action="{{ url_for('download_file') }}" method="GET">
       <div class="form-group">
         <label>Mode:</label>
@@ -120,50 +206,6 @@
       </div>
       <button type="submit" class="btn btn-primary">Download ZIP</button>
     </form>
-  </div>
-
-  <!-- Local FS Usage -->
-  <div class="tab-pane fade p-3" id="localFs" role="tabpanel" aria-labelledby="localFs-tab">
-    <h4>Local Filesystem Usage</h4>
-    <p>Below is usage info for the configured mount points:</p>
-    <table class="table table-bordered">
-      <thead>
-        <tr>
-          <th>Mount Point</th>
-          <th>Size</th>
-          <th>Used</th>
-          <th>Avail</th>
-          <th>Use%</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for mp, size, used, avail, pct in local_fs_usage %}
-          <tr>
-            <td>{{ mp }}</td>
-            <td>{{ size }}</td>
-            <td>{{ used }}</td>
-            <td>{{ avail }}</td>
-            <td>{{ pct }}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-
-  <!-- HDFS Usage -->
-  <div class="tab-pane fade p-3" id="hdfsUsage" role="tabpanel" aria-labelledby="hdfsUsage-tab">
-    <h4>HDFS Usage</h4>
-    {% if hdfs_usage_data %}
-      <p><strong>Location:</strong> {{ hdfs_usage_data.location }}</p>
-      <p><strong>Namespace Quota:</strong> {{ hdfs_usage_data.ns_quota }}</p>
-      <p><strong>Namespace Used:</strong> {{ hdfs_usage_data.ns_used }}</p>
-      <p><strong>Namespace % Used:</strong> {{ hdfs_usage_data.ns_pct }}%</p>
-      <p><strong>Space Quota (GB):</strong> {{ hdfs_usage_data.space_quota }}</p>
-      <p><strong>Space Used (GB):</strong> {{ hdfs_usage_data.space_used }}</p>
-      <p><strong>Space % Used:</strong> {{ hdfs_usage_data.space_pct }}%</p>
-    {% else %}
-      <p>Could not fetch HDFS usage data. Check logs or config.</p>
-    {% endif %}
   </div>
 </div>
 
