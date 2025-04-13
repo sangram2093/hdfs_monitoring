@@ -15,6 +15,12 @@ temp_exclusion_file_local: "/home/edgeuser/cleanup_framework/temp_exclusions_loc
 # This file lists local directories that contain version subdirectories – only the highest version is kept, older versions are deleted.
 versioned_dirs_local: "/home/edgeuser/cleanup_framework/versioned_dirs_local.txt"
 
+# Suppose we store the mount points we want to track:
+local_mount_points:
+  - "/apps/stadgcsv"
+  - "/tmp"
+  - "/opt"
+  
 # For HDFS usage scraping, we store the URL:
 hdfs_usage_url: "http://freeq.cd.com:20931/@@/SDL-ABD/regions/space-utilization.htm"
 # The location we want, e.g. "/project/stadgcsv"
