@@ -20,9 +20,7 @@ local_mount_points:
   - "/apps/stadgcsv"
   - "/tmp"
   - "/opt"
-  
-# For HDFS usage scraping, we store the URL:
-hdfs_usage_url: "http://freeq.cd.com:20931/@@/SDL-ABD/regions/space-utilization.htm"
+
 # The location we want, e.g. "/project/stadgcsv"
 hdfs_quota_location: "/project/stadgcsv"
 
