@@ -41,59 +41,82 @@
   </div>
 </div>
 
-<!-- 2) Quota Information (HDFS & Local) -->
-<div class="row">
-  <!-- HDFS usage data -->
-  <div class="col-md-6">
-    <div class="card mb-3">
-      <div class="card-body">
-        <h5 class="card-title">HDFS Quota Usage</h5>
-        {% if hdfs_usage_data %}
-          <p><strong>Location:</strong> {{ hdfs_usage_data.location }}</p>
-          <p><strong>Namespace Quota:</strong> {{ hdfs_usage_data.ns_quota }}</p>
-          <p><strong>Namespace Used:</strong> {{ hdfs_usage_data.ns_used }}</p>
-          <p><strong>Namespace % Used:</strong> {{ hdfs_usage_data.ns_pct }}%</p>
-          <p><strong>Space Quota (TB):</strong> {{ hdfs_usage_data.space_quota_tb }}</p>
-          <p><strong>Space Used (TB):</strong> {{ hdfs_usage_data.space_used_tb }}</p>
-          <p><strong>Space % Used:</strong> {{ hdfs_usage_data.space_pct }}%</p>
-        {% else %}
-          <p>Could not fetch HDFS quota usage. Check path or command output.</p>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-  
-  <!-- Local FS usage -->
-  <div class="col-md-6">
-    <div class="card mb-3">
-      <div class="card-body">
-        <h5 class="card-title">Local Filesystem Usage</h5>
-        <table class="table table-bordered">
-          <thead>
-            <tr>
-              <th>Mount Point</th>
-              <th>Size</th>
-              <th>Used</th>
-              <th>Avail</th>
-              <th>Use%</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for mp, size, used, avail, pct in local_fs_usage %}
-              <tr>
-                <td>{{ mp }}</td>
-                <td>{{ size }}</td>
-                <td>{{ used }}</td>
-                <td>{{ avail }}</td>
-                <td>{{ pct }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
+<!-- 2) HDFS Quota Usage Table -->
+<div class="card mb-3">
+  <div class="card-body">
+    <h5 class="card-title">HDFS Quota Usage</h5>
+    <table class="table table-bordered table-sm">
+      <thead>
+        <tr>
+          <th>HDFS Path</th>
+          <th>NS Quota</th>
+          <th>NS Used</th>
+          <th>NS % Used</th>
+          <th>Space Quota (TB)</th>
+          <th>Space Used (TB)</th>
+          <th>Space % Used</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for usage in hdfs_usage_list %}
+        <tr>
+          <td>{{ usage.location }}</td>
+          <td>{{ usage.ns_quota }}</td>
+          <td>{{ usage.ns_used }}</td>
+          {% if usage.ns_pct > 80 %}
+            <td style="background-color:#f99;">{{ usage.ns_pct }}%</td>
+          {% else %}
+            <td>{{ usage.ns_pct }}%</td>
+          {% endif %}
+
+          <td>{{ usage.space_quota_tb }}</td>
+          <td>{{ usage.space_used_tb }}</td>
+          {% if usage.space_pct > 80 %}
+            <td style="background-color:#f99;">{{ usage.space_pct }}%</td>
+          {% else %}
+            <td>{{ usage.space_pct }}%</td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
+
+<!-- 3) Local FS usage -->
+<div class="card mb-3">
+  <div class="card-body">
+    <h5 class="card-title">Local Filesystem Usage</h5>
+    <table class="table table-bordered table-sm">
+      <thead>
+        <tr>
+          <th>Mount Point</th>
+          <th>Size</th>
+          <th>Used</th>
+          <th>Avail</th>
+          <th>Use%</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for mp, size, used, avail, pct in local_fs_usage %}
+          {% set usage_pct = pct.strip('%') %}
+          <tr>
+            <td>{{ mp }}</td>
+            <td>{{ size }}</td>
+            <td>{{ used }}</td>
+            <td>{{ avail }}</td>
+            {% if usage_pct|float > 80 %}
+              <td style="background-color:#f99;">{{ pct }}</td>
+            {% else %}
+              <td>{{ pct }}</td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 
 <hr />
 
