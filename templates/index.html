@@ -1,0 +1,50 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<h2>Welcome to the Cleanup App</h2>
+
+<!-- 1) Add Temp Exclusions -->
+<form action="{{ url_for('add_temp_exclusions') }}" method="POST">
+  <h3>1) Add Temp Exclusions</h3>
+  <label for="exclusionLines">Enter paths (one per line):</label>
+  <textarea name="exclusionLines" id="exclusionLines" rows="4"></textarea>
+  <button type="submit">Add to Temp Exclusions</button>
+</form>
+
+<hr />
+
+<!-- 2) Subscribe Email -->
+<form action="{{ url_for('subscribe_email') }}" method="POST">
+  <h3>2) Subscribe for Email Notifications</h3>
+  <label for="emailAddress">Email Address:</label>
+  <input type="text" id="emailAddress" name="emailAddress" />
+  <button type="submit">Subscribe</button>
+</form>
+
+<!-- 3) Unsubscribe Email -->
+<form action="{{ url_for('unsubscribe_email') }}" method="POST">
+  <h3>3) Unsubscribe from Email Notifications</h3>
+  <label for="emailAddress">Email Address:</label>
+  <input type="text" id="emailAddress" name="emailAddress" />
+  <button type="submit">Unsubscribe</button>
+</form>
+
+<!-- Show the current subscription list from config -->
+<h4>Current Subscription List:</h4>
+<ul>
+  {% for email in email_list %}
+    <li>{{email}}</li>
+  {% endfor %}
+</ul>
+
+<hr />
+
+<!-- 4) Add Versioned Directory -->
+<form action="{{ url_for('add_versioned_directory') }}" method="POST">
+  <h3>4) Add Versioned Directories</h3>
+  <label for="versionedLines">Enter directory paths (one per line):</label>
+  <textarea name="versionedLines" id="versionedLines" rows="4"></textarea>
+  <button type="submit">Add to Versioned Dirs</button>
+</form>
+
+{% endblock %}
