@@ -5,7 +5,9 @@ import sys
 # CONFIGURATION
 # ---------------------------------------------------------------------
 TEAM_KEYWORDS = ["bm", "ib", "fx", "fi", "wm", "pcc", "eq"]
-BASE_PREFIX = "/project/abcd/"  # We'll prepend this to the base dir for printing
+# If the "actual" base path is /project/abcd/efgh/ijkl, then the directory
+# at index 5 is what we consider the "one-level-deep base directory".
+BASE_DIR_INDEX = 5
 
 def parse_size(size_str):
     """
@@ -14,8 +16,7 @@ def parse_size(size_str):
     """
     parts = size_str.strip().split()
     if len(parts) != 2:
-        # If malformed, return 0 or raise an exception as needed
-        return 0
+        return 0  # or raise an exception if desired
 
     num_str, unit = parts
     try:
@@ -39,8 +40,7 @@ def parse_size(size_str):
 
 def format_size(size_in_bytes):
     """
-    Return a human-readable string for the given byte size.
-    E.g. 1.23 TB, 456.78 MB, etc.
+    Convert a byte size into a human-readable string (TB, GB, MB, etc.).
     """
     TB = 1024**4
     GB = 1024**3
@@ -58,35 +58,36 @@ def format_size(size_in_bytes):
     else:
         return f"{size_in_bytes} B"
 
-def find_base_directory(path_parts):
+def find_base_directory(path_parts, base_dir_index=BASE_DIR_INDEX):
     """
-    Identify the one-level-deep base directory (e.g., 'model', 'feed', 'alert', 'process')
-    from a path like /project/abcd/model/... => path_parts[3].
+    Identify the one-level-deep "base directory" at path_parts[base_dir_index].
+    If not present, return "unknown".
     """
-    if len(path_parts) > 3:
-        return path_parts[3]
+    if len(path_parts) > base_dir_index:
+        return path_parts[base_dir_index]
     return "unknown"
 
-def find_team_keyword(path_parts):
+def find_team_keyword(path_parts, team_keywords=TEAM_KEYWORDS):
     """
-    Search *all* path segments after the base directory index (3) to see if any
-    contain a known team keyword. If so, return that keyword. Otherwise, return 'other'.
-
-    e.g. /project/abcd/model/cd-calc-alert-bm => path_parts = ["", "project", "abcd", "model", "cd-calc-alert-bm"]
-    We check path_parts[4], [5], etc., to see if 'bm' is a substring in any segment.
+    Search *all* path segments after BASE_DIR_INDEX for known team keywords.
+    If any segment contains a keyword, return that keyword; else 'other'.
     """
-    # If path_parts = ['', 'project', 'abcd', 'model', 'cd-calc-alert-bm', 'some-other']
-    # We'll check from index 4 onward
-    for segment in path_parts[4:]:
+    start_index = BASE_DIR_INDEX + 1
+    # For example, if the path is:
+    #    /project/abcd/efgh/ijkl/model/cd-calc-alert-bm/
+    # path_parts might be:
+    #    ['', 'project', 'abcd', 'efgh', 'ijkl', 'model', 'cd-calc-alert-bm']
+    # We'll check from index 6 onward for team keywords like 'bm'.
+    for segment in path_parts[start_index:]:
         seg_lower = segment.lower()
-        for kw in TEAM_KEYWORDS:
+        for kw in team_keywords:
             if kw in seg_lower:
                 return kw
     return "other"
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python script.py <file_with_old_dirs>")
+        print("Usage: python script.py <old_dirs_file>")
         sys.exit(1)
 
     input_file = sys.argv[1]
@@ -102,11 +103,11 @@ def main():
                 # skip empty or malformed lines
                 continue
 
-            # example line: "/project/abcd/model/cd-calc-alert-bm,1 GB"
+            # Example line: "/project/abcd/efgh/ijkl/model/cd-calc-alert-bm,1 GB"
             path_str, size_str = line.split(",", 1)
             size_in_bytes = parse_size(size_str)
 
-            # 2) Parse the path to get base directory & team
+            # 2) Parse the path
             path_parts = path_str.split("/")
             base_dir = find_base_directory(path_parts)
             team = find_team_keyword(path_parts)
@@ -116,23 +117,37 @@ def main():
             aggregator[key] = aggregator.get(key, 0) + size_in_bytes
 
     # 4) Print results in desired format
-    #    e.g. "bm size in /project/abcd/model = 1 TB"
-    # We'll group by base_dir so that we print teams for each base_dir together.
-    base_dirs = sorted(set(bd for (bd, _) in aggregator.keys()))
+    #    e.g.: "bm size in /project/abcd/efgh/ijkl/model = 1 TB"
+    # We'll group by base_dir so that we can list all teams for each base_dir together.
+    # There's no single "BASE_PREFIX" now, because the actual base might be deeper.
+    # We'll just reprint the entire path as /project/abcd/efgh/ijkl/<base_dir>.
+    # If you specifically want "/project/abcd/efgh/ijkl/" + base_dir, define that prefix.
+    # Example prefix if needed: 
+    # BASE_PATH_PREFIX = "/project/abcd/efgh/ijkl/" 
+    # Then final path = BASE_PATH_PREFIX + base_dir
 
-    for bd in base_dirs:
+    all_base_dirs = sorted(set(bd for (bd, _) in aggregator.keys()))
+
+    for bd in all_base_dirs:
         # find all teams for this base dir
-        # sort them by name if you wish
-        teams_for_bd = [(team, aggregator[(bd, team)]) 
-                        for team in sorted(t for (b, t) in aggregator.keys() if b == bd)]
-        
+        teams_for_bd = [(team, aggregator[(bd, team)])
+                        for (b, team) in aggregator.keys() if b == bd]
+
         if not teams_for_bd:
             continue
-        
-        base_dir_path = BASE_PREFIX + bd  # e.g. "/project/abcd/model"
-        for (team, size_bytes) in teams_for_bd:
-            size_hr = format_size(size_bytes)
-            print(f"{team} size in {base_dir_path} = {size_hr}")
+
+        # Sort teams by name if desired
+        teams_for_bd.sort(key=lambda x: x[0])
+
+        # If you want the final printed path to be /project/abcd/efgh/ijkl/<bd>, define a prefix:
+        # e.g. prefix = "/project/abcd/efgh/ijkl/" 
+        # and do prefix + bd
+        # For now, let's just do a naive guess:
+        final_base_path = f"/project/abcd/efgh/ijkl/{bd}"
+
+        for (team, total_bytes) in teams_for_bd:
+            size_hr = format_size(total_bytes)
+            print(f"{team} size in {final_base_path} = {size_hr}")
 
 if __name__ == "__main__":
     main()
