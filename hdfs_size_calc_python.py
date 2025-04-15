@@ -5,8 +5,10 @@ import sys
 # CONFIGURATION
 # ---------------------------------------------------------------------
 TEAM_KEYWORDS = ["bm", "ib", "fx", "fi", "wm", "pcc", "eq"]
-# If the "actual" base path is /project/abcd/efgh/ijkl, then the directory
-# at index 5 is what we consider the "one-level-deep base directory".
+# Adjust this if your "base directory" is at a different position.
+# For example, if the full path is: /project/abcd/efgh/ijkl/model/...
+# and you want "model" to be considered the "one-level-deep" directory,
+# that might be at index 5. Adjust as necessary.
 BASE_DIR_INDEX = 5
 
 def parse_size(size_str):
@@ -16,7 +18,7 @@ def parse_size(size_str):
     """
     parts = size_str.strip().split()
     if len(parts) != 2:
-        return 0  # or raise an exception if desired
+        return 0
 
     num_str, unit = parts
     try:
@@ -69,15 +71,10 @@ def find_base_directory(path_parts, base_dir_index=BASE_DIR_INDEX):
 
 def find_team_keyword(path_parts, team_keywords=TEAM_KEYWORDS):
     """
-    Search *all* path segments after BASE_DIR_INDEX for known team keywords.
+    Search all path segments after BASE_DIR_INDEX for known team keywords.
     If any segment contains a keyword, return that keyword; else 'other'.
     """
     start_index = BASE_DIR_INDEX + 1
-    # For example, if the path is:
-    #    /project/abcd/efgh/ijkl/model/cd-calc-alert-bm/
-    # path_parts might be:
-    #    ['', 'project', 'abcd', 'efgh', 'ijkl', 'model', 'cd-calc-alert-bm']
-    # We'll check from index 6 onward for team keywords like 'bm'.
     for segment in path_parts[start_index:]:
         seg_lower = segment.lower()
         for kw in team_keywords:
@@ -103,7 +100,6 @@ def main():
                 # skip empty or malformed lines
                 continue
 
-            # Example line: "/project/abcd/efgh/ijkl/model/cd-calc-alert-bm,1 GB"
             path_str, size_str = line.split(",", 1)
             size_in_bytes = parse_size(size_str)
 
@@ -116,38 +112,41 @@ def main():
             key = (base_dir, team)
             aggregator[key] = aggregator.get(key, 0) + size_in_bytes
 
-    # 4) Print results in desired format
-    #    e.g.: "bm size in /project/abcd/efgh/ijkl/model = 1 TB"
-    # We'll group by base_dir so that we can list all teams for each base_dir together.
-    # There's no single "BASE_PREFIX" now, because the actual base might be deeper.
-    # We'll just reprint the entire path as /project/abcd/efgh/ijkl/<base_dir>.
-    # If you specifically want "/project/abcd/efgh/ijkl/" + base_dir, define that prefix.
-    # Example prefix if needed: 
-    # BASE_PATH_PREFIX = "/project/abcd/efgh/ijkl/" 
-    # Then final path = BASE_PATH_PREFIX + base_dir
+    # 4) Print results in desired format (per baseDir).
+    #    e.g. "bm size in /project/abcd/efgh/ijkl/model = 1 TB"
+    #    We'll collect all base_dir values, then print all teams for each base_dir.
+    base_dirs = sorted(set(bd for (bd, _) in aggregator.keys()))
 
-    all_base_dirs = sorted(set(bd for (bd, _) in aggregator.keys()))
+    # Also keep track of global sums by team
+    global_team_sizes = {}
 
-    for bd in all_base_dirs:
-        # find all teams for this base dir
-        teams_for_bd = [(team, aggregator[(bd, team)])
+    for bd in base_dirs:
+        # find all (team, size) pairs for this baseDir
+        pairs_for_bd = [(team, aggregator[(bd, team)])
                         for (b, team) in aggregator.keys() if b == bd]
 
-        if not teams_for_bd:
+        if not pairs_for_bd:
             continue
 
-        # Sort teams by name if desired
-        teams_for_bd.sort(key=lambda x: x[0])
+        # Sort by team name for consistent output
+        pairs_for_bd.sort(key=lambda x: x[0])
 
-        # If you want the final printed path to be /project/abcd/efgh/ijkl/<bd>, define a prefix:
-        # e.g. prefix = "/project/abcd/efgh/ijkl/" 
-        # and do prefix + bd
-        # For now, let's just do a naive guess:
-        final_base_path = f"/project/abcd/efgh/ijkl/{bd}"
+        # Construct the printing path for base_dir. Adjust prefix if needed.
+        full_base_path = f"/project/abcd/efgh/ijkl/{bd}"
 
-        for (team, total_bytes) in teams_for_bd:
+        for (team, total_bytes) in pairs_for_bd:
             size_hr = format_size(total_bytes)
-            print(f"{team} size in {final_base_path} = {size_hr}")
+            print(f"{team} size in {full_base_path} = {size_hr}")
+
+            # Accumulate into global sums
+            global_team_sizes[team] = global_team_sizes.get(team, 0) + total_bytes
+
+    print()
+    print("=== Global Sums Across All One-Level Directories ===")
+    # Sort by team name
+    for team in sorted(global_team_sizes.keys()):
+        hr_size = format_size(global_team_sizes[team])
+        print(f"{team} size for old dirs = {hr_size}")
 
 if __name__ == "__main__":
     main()
