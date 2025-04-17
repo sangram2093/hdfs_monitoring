@@ -3,8 +3,8 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.spark.sql.SaveMode
 
 val inputFilePath = spark.conf.get("spark.cleanup.inputPath")
-val outputDir = spark.conf.get("spark.cleanup.outputPath") // Directory where final output will be placed
-val finalFileName = "directory_sizes.csv" // Customize this
+val outputDir = spark.conf.get("spark.cleanup.outputPath")
+val finalFileName = "directory_sizes.csv"
 val tempOutputDir = outputDir + "_tmp"
 
 println(s"Input file list path: $inputFilePath")
@@ -38,19 +38,18 @@ val fileSizes = fileList.mapPartitions { paths =>
         (dirPathStr, "INVALID_PATH")
       }
     } catch {
-      case e: Exception =>
-        (dirPathStr, "ERROR")
+      case _: Exception => (dirPathStr, "ERROR")
     }
+  }
 }.toDF("path", "size")
 
-// Write to temp directory
 fileSizes.coalesce(1)
   .write
   .mode(SaveMode.Overwrite)
   .option("header", "true")
   .csv(tempOutputDir)
 
-// Rename part file to custom name and move to final output path
+// Rename part file and move to final output
 val conf = new Configuration()
 val fs = FileSystem.get(conf)
 
@@ -58,23 +57,24 @@ val tempPath = new Path(tempOutputDir)
 val finalPath = new Path(outputDir)
 val finalFilePath = new Path(finalPath, finalFileName)
 
-// Delete existing final file if exists
+// Delete existing final file if it exists
 if (fs.exists(finalFilePath)) {
   fs.delete(finalFilePath, false)
 }
 
-// Create output directory if it doesn't exist
+// Create output directory if not exists
 if (!fs.exists(finalPath)) {
   fs.mkdirs(finalPath)
 }
 
-// Find the part file
+// Rename part file to final name
 val partFile = fs.listStatus(tempPath).find(_.getPath.getName.startsWith("part-")).get.getPath
-
-// Move and rename
 fs.rename(partFile, finalFilePath)
 
-// Clean up temp directory
+// Delete temp dir
 fs.delete(tempPath, true)
 
 println(s"Output written to: $finalFilePath")
+
+spark.stop()
+System.exit(0)
