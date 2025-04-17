@@ -13,14 +13,14 @@ def list_hdfs_directories(path):
             ["hdfs", "dfs", "-ls", path],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            universal_newlines=True,  # Use this instead of text=True for Python 3.6
             check=True
         )
         lines = result.stdout.strip().split("\n")[1:]  # Skip header
         dirs = []
         for line in lines:
             parts = line.split()
-            if parts[0].startswith("d"):  # It's a directory
+            if parts and parts[0].startswith("d"):  # Ensure non-empty line and it's a directory
                 dirs.append(parts[-1])
         return dirs
     except subprocess.CalledProcessError:
