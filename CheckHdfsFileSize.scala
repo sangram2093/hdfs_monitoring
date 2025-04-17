@@ -30,8 +30,11 @@ val fileSizes = fileList.mapPartitions { paths =>
     try {
       val dirPath = new Path(dirPathStr)
       if (fs.exists(dirPath) && fs.getFileStatus(dirPath).isDirectory) {
-        val files: Array[FileStatus] = fs.listStatus(dirPath)
-        val totalSize = files.map(_.getLen).sum
+        val iter = fs.listFiles(dirPath, true) // recursive
+        var totalSize = 0L
+        while (iter.hasNext) {
+          totalSize += iter.next().getLen
+        }
         val readableSize = humanReadableByteCountSI(totalSize)
         (dirPathStr, readableSize)
       } else {
