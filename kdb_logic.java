@@ -7,62 +7,59 @@ import java.util.stream.*;
 
 public class KdbQueryGenerator {
 
-    static class Interest {
-        String ric;
-        ZonedDateTime startTime;
-        ZonedDateTime endTime;
-
-        public Interest(String ric, ZonedDateTime startTime, ZonedDateTime endTime) {
-            this.ric = ric;
-            this.startTime = startTime;
-            this.endTime = endTime;
-        }
-    }
-
     static class RicWindow {
         String ric;
-        ZonedDateTime minStart;
-        ZonedDateTime maxEnd;
+        ZonedDateTime start;
+        ZonedDateTime end;
 
-        public RicWindow(String ric, ZonedDateTime minStart, ZonedDateTime maxEnd) {
+        public RicWindow(String ric, ZonedDateTime start, ZonedDateTime end) {
             this.ric = ric;
-            this.minStart = minStart;
-            this.maxEnd = maxEnd;
+            this.start = start;
+            this.end = end;
         }
     }
 
-    // Use UTC format to avoid time skew issues
     private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd").withZone(ZoneOffset.UTC);
     private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneOffset.UTC);
 
     public static void main(String[] args) throws IOException {
         String csvFile = "interest_list.csv";
         String outputFile = "kdb_queries.txt";
-        int maxRicsPerChunk = 20; // configurable
-        Duration overlapWindow = Duration.ofMinutes(5); // configurable
+        int maxRicsPerQuery = 20;
+        Duration intervalSize = Duration.ofMinutes(5);
 
-        List<Interest> interests = loadInterestList(csvFile);
-        Map<String, RicWindow> ricTimeMap = calculateMinMaxTimes(interests);
-        List<List<RicWindow>> chunks = groupOverlappingRics(ricTimeMap.values(), overlapWindow, maxRicsPerChunk);
+        List<RicWindow> ricWindows = loadAndExplodeInterestList(csvFile, intervalSize);
 
-        // ✅ Sort groups by first RIC and then by minStart time
-        chunks.sort(Comparator
-            .comparing((List<RicWindow> g) -> g.stream().map(r -> r.ric).sorted().findFirst().orElse(""))
-            .thenComparing(g -> g.stream().map(r -> r.minStart).min(Comparator.naturalOrder()).orElse(ZonedDateTime.now()))
-        );
+        // Group by interval start time
+        Map<ZonedDateTime, List<RicWindow>> intervalBuckets = ricWindows.stream()
+                .collect(Collectors.groupingBy(w -> getIntervalStart(w.start, intervalSize)));
 
-        List<String> kdbQueries = chunks.stream()
-                .map(KdbQueryGenerator::generateKdbQuery)
-                .collect(Collectors.toList());
+        List<String> queries = new ArrayList<>();
 
-        Files.write(Paths.get(outputFile), kdbQueries);
-        System.out.println("✅ KDB Queries written to: " + outputFile);
+        // Sort intervals
+        List<ZonedDateTime> sortedIntervals = new ArrayList<>(intervalBuckets.keySet());
+        sortedIntervals.sort(Comparator.naturalOrder());
+
+        for (ZonedDateTime intervalStart : sortedIntervals) {
+            List<RicWindow> ricsInWindow = intervalBuckets.get(intervalStart);
+
+            // Sort RICs inside interval
+            ricsInWindow.sort(Comparator.comparing(r -> r.ric));
+
+            for (int i = 0; i < ricsInWindow.size(); i += maxRicsPerQuery) {
+                List<RicWindow> batch = ricsInWindow.subList(i, Math.min(i + maxRicsPerQuery, ricsInWindow.size()));
+                queries.add(generateKdbQuery(intervalStart, intervalStart.plus(intervalSize), batch));
+            }
+        }
+
+        Files.write(Paths.get(outputFile), queries);
+        System.out.println("✅ KDB queries written to " + outputFile);
     }
 
-    private static List<Interest> loadInterestList(String file) throws IOException {
-        List<Interest> list = new ArrayList<>();
+    private static List<RicWindow> loadAndExplodeInterestList(String file, Duration intervalSize) throws IOException {
+        List<RicWindow> explodedWindows = new ArrayList<>();
         List<String> allLines = Files.readAllLines(Paths.get(file));
-        List<String> lines = allLines.subList(1, allLines.size()); // Skip header
+        List<String> lines = allLines.subList(1, allLines.size()); // skip header
 
         for (String line : lines) {
             String[] parts = line.split(",", -1);
@@ -74,72 +71,38 @@ public class KdbQueryGenerator {
             try {
                 ZonedDateTime start = ZonedDateTime.parse(parts[5]).withZoneSameInstant(ZoneOffset.UTC);
                 ZonedDateTime end = ZonedDateTime.parse(parts[6]).withZoneSameInstant(ZoneOffset.UTC);
-                list.add(new Interest(ric, start, end));
+
+                ZonedDateTime windowStart = getIntervalStart(start, intervalSize);
+                while (windowStart.isBefore(end)) {
+                    ZonedDateTime windowEnd = windowStart.plus(intervalSize);
+                    ZonedDateTime ricStart = start.isAfter(windowStart) ? start : windowStart;
+                    ZonedDateTime ricEnd = end.isBefore(windowEnd) ? end : windowEnd;
+
+                    explodedWindows.add(new RicWindow(ric, ricStart, ricEnd));
+                    windowStart = windowEnd;
+                }
+
             } catch (DateTimeException e) {
-                System.err.println("Skipping invalid datetime row: " + line);
-            }
-        }
-        return list;
-    }
-
-    private static Map<String, RicWindow> calculateMinMaxTimes(List<Interest> list) {
-        return list.stream()
-                .collect(Collectors.groupingBy(i -> i.ric))
-                .entrySet()
-                .stream()
-                .map(e -> {
-                    String ric = e.getKey();
-                    List<Interest> ricEntries = e.getValue();
-                    ZonedDateTime minStart = ricEntries.stream().map(i -> i.startTime).min(Comparator.naturalOrder()).get();
-                    ZonedDateTime maxEnd = ricEntries.stream().map(i -> i.endTime).max(Comparator.naturalOrder()).get();
-                    return new AbstractMap.SimpleEntry<>(ric, new RicWindow(ric, minStart, maxEnd));
-                })
-                .sorted(Map.Entry.comparingByKey())
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (a, b) -> a, LinkedHashMap::new));
-    }
-
-    private static List<List<RicWindow>> groupOverlappingRics(Collection<RicWindow> rics, Duration maxWindow, int maxChunkSize) {
-        List<RicWindow> sorted = new ArrayList<>(rics);
-        sorted.sort(Comparator.comparing(r -> r.minStart));
-
-        List<List<RicWindow>> result = new ArrayList<>();
-        List<RicWindow> currentGroup = new ArrayList<>();
-
-        for (RicWindow r : sorted) {
-            currentGroup.add(r);
-
-            ZonedDateTime groupStart = currentGroup.stream().map(g -> g.minStart).min(Comparator.naturalOrder()).get();
-            ZonedDateTime groupEnd = currentGroup.stream().map(g -> g.maxEnd).max(Comparator.naturalOrder()).get();
-            Duration windowDuration = Duration.between(groupStart, groupEnd);
-
-            boolean windowExceeded = windowDuration.compareTo(maxWindow) > 0;
-            boolean sizeExceeded = currentGroup.size() > maxChunkSize;
-
-            if (windowExceeded || sizeExceeded) {
-                RicWindow last = currentGroup.remove(currentGroup.size() - 1);
-                result.add(new ArrayList<>(currentGroup));
-                currentGroup.clear();
-                currentGroup.add(last); // start new group
+                System.err.println("Skipping row with invalid date: " + line);
             }
         }
 
-        if (!currentGroup.isEmpty()) {
-            result.add(currentGroup);
-        }
-
-        return result;
+        return explodedWindows;
     }
 
-    private static String generateKdbQuery(List<RicWindow> group) {
-        if (group == null || group.isEmpty()) {
-            return "// Empty group — no KDB query generated.\n";
-        }
+    private static ZonedDateTime getIntervalStart(ZonedDateTime time, Duration interval) {
+        long seconds = time.toEpochSecond();
+        long intervalSeconds = interval.getSeconds();
+        long floored = (seconds / intervalSeconds) * intervalSeconds;
+        return ZonedDateTime.ofInstant(Instant.ofEpochSecond(floored), ZoneOffset.UTC);
+    }
 
-        ZonedDateTime minStart = group.stream().map(r -> r.minStart).min(Comparator.naturalOrder()).get();
-        ZonedDateTime maxEnd = group.stream().map(r -> r.maxEnd).max(Comparator.naturalOrder()).get();
+    private static String generateKdbQuery(ZonedDateTime start, ZonedDateTime end, List<RicWindow> group) {
+        if (group.isEmpty()) return "// Skipped empty group\n";
 
         String ricList = group.stream()
                 .map(r -> "\"" + r.ric + "\"")
+                .distinct()
                 .collect(Collectors.joining("; ", "`$(", ")"));
 
         return String.format(
@@ -148,10 +111,10 @@ public class KdbQueryGenerator {
           + "`bidSize1`bidSize2`bidSize3`bidSize4`bidSize5`askPrice1`askPrice2`askPrice3`askPrice4`askPrice5"
           + "`askSize1`askSize2`askSize3`askSize4`askSize5`bidNo1`bidNo2`bidNo3`bidNo4`bidNo5`askNo1`askNo2`askNo3`askNo4`askNo5;"
           + "`ric;`depth;`;0b;%s;%s;%s;%s;`$\"\";%s)]",
-            KDB_DATE.format(minStart),
-            KDB_TIME.format(minStart),
-            KDB_DATE.format(maxEnd),
-            KDB_TIME.format(maxEnd),
+            KDB_DATE.format(start),
+            KDB_TIME.format(start),
+            KDB_DATE.format(end),
+            KDB_TIME.format(end),
             ricList
         );
     }
