@@ -37,8 +37,8 @@ public class KdbQueryGenerator {
     public static void main(String[] args) throws IOException {
         String csvFile = "interest_list.csv";
         String outputFile = "kdb_queries.txt";
-        int maxRicsPerChunk = 20;
-        Duration overlapWindow = Duration.ofMinutes(5);
+        int maxRicsPerChunk = 20; // configurable
+        Duration overlapWindow = Duration.ofMinutes(5); // configurable
 
         List<Interest> interests = loadInterestList(csvFile);
         Map<String, RicWindow> ricTimeMap = calculateMinMaxTimes(interests);
@@ -49,14 +49,18 @@ public class KdbQueryGenerator {
                 .collect(Collectors.toList());
 
         Files.write(Paths.get(outputFile), kdbQueries);
-        System.out.println("KDB Queries written to: " + outputFile);
+        System.out.println("✅ KDB Queries written to: " + outputFile);
     }
 
     private static List<Interest> loadInterestList(String file) throws IOException {
         List<Interest> list = new ArrayList<>();
-        List<String> lines = Files.readAllLines(Paths.get(file)).subList(1, Integer.MAX_VALUE); // Skip header
+        List<String> allLines = Files.readAllLines(Paths.get(file));
+        List<String> lines = allLines.subList(1, allLines.size()); // Skip header
+
         for (String line : lines) {
             String[] parts = line.split(",", -1);
+            if (parts.length < 7) continue;
+
             String ric = parts[2].trim().replaceAll("\"", "");
             if (ric.isEmpty()) continue;
 
@@ -87,34 +91,32 @@ public class KdbQueryGenerator {
     private static List<List<RicWindow>> groupOverlappingRics(Collection<RicWindow> rics, Duration maxWindow, int maxChunkSize) {
         List<RicWindow> sorted = new ArrayList<>(rics);
         sorted.sort(Comparator.comparing(r -> r.minStart));
-    
+
         List<List<RicWindow>> result = new ArrayList<>();
         List<RicWindow> currentGroup = new ArrayList<>();
-    
+
         for (RicWindow r : sorted) {
             currentGroup.add(r);
-    
-            // Calculate the current window size
+
             ZonedDateTime groupStart = currentGroup.stream().map(g -> g.minStart).min(Comparator.naturalOrder()).get();
             ZonedDateTime groupEnd = currentGroup.stream().map(g -> g.maxEnd).max(Comparator.naturalOrder()).get();
             Duration windowDuration = Duration.between(groupStart, groupEnd);
-    
+
             boolean windowExceeded = windowDuration.compareTo(maxWindow) > 0;
             boolean sizeExceeded = currentGroup.size() > maxChunkSize;
-    
+
             if (windowExceeded || sizeExceeded) {
-                // Remove last added (current RIC) and close previous group
                 RicWindow last = currentGroup.remove(currentGroup.size() - 1);
                 result.add(new ArrayList<>(currentGroup));
                 currentGroup.clear();
-                currentGroup.add(last); // Start new group
+                currentGroup.add(last); // start new group
             }
         }
-    
+
         if (!currentGroup.isEmpty()) {
             result.add(currentGroup);
         }
-    
+
         return result;
     }
 
