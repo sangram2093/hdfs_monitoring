@@ -84,37 +84,38 @@ public class KdbQueryGenerator {
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (a, b) -> a, LinkedHashMap::new));
     }
 
-    private static List<List<RicWindow>> groupOverlappingRics(Collection<RicWindow> rics, Duration window, int maxChunkSize) {
-        List<RicWindow> sortedRics = new ArrayList<>(rics);
-        sortedRics.sort(Comparator.comparing(r -> r.ric));
-
-        List<List<RicWindow>> groups = new ArrayList<>();
+    private static List<List<RicWindow>> groupOverlappingRics(Collection<RicWindow> rics, Duration maxWindow, int maxChunkSize) {
+        List<RicWindow> sorted = new ArrayList<>(rics);
+        sorted.sort(Comparator.comparing(r -> r.minStart));
+    
+        List<List<RicWindow>> result = new ArrayList<>();
         List<RicWindow> currentGroup = new ArrayList<>();
-
-        for (RicWindow ric : sortedRics) {
-            if (currentGroup.isEmpty()) {
-                currentGroup.add(ric);
-                continue;
-            }
-
-            boolean overlaps = currentGroup.stream().anyMatch(r ->
-                    !ric.minStart.isAfter(r.maxEnd.plus(window)) &&
-                    !ric.maxEnd.isBefore(r.minStart.minus(window)));
-
-            if (overlaps && currentGroup.size() < maxChunkSize) {
-                currentGroup.add(ric);
-            } else {
-                groups.add(new ArrayList<>(currentGroup));
+    
+        for (RicWindow r : sorted) {
+            currentGroup.add(r);
+    
+            // Calculate the current window size
+            ZonedDateTime groupStart = currentGroup.stream().map(g -> g.minStart).min(Comparator.naturalOrder()).get();
+            ZonedDateTime groupEnd = currentGroup.stream().map(g -> g.maxEnd).max(Comparator.naturalOrder()).get();
+            Duration windowDuration = Duration.between(groupStart, groupEnd);
+    
+            boolean windowExceeded = windowDuration.compareTo(maxWindow) > 0;
+            boolean sizeExceeded = currentGroup.size() > maxChunkSize;
+    
+            if (windowExceeded || sizeExceeded) {
+                // Remove last added (current RIC) and close previous group
+                RicWindow last = currentGroup.remove(currentGroup.size() - 1);
+                result.add(new ArrayList<>(currentGroup));
                 currentGroup.clear();
-                currentGroup.add(ric);
+                currentGroup.add(last); // Start new group
             }
         }
-
+    
         if (!currentGroup.isEmpty()) {
-            groups.add(currentGroup);
+            result.add(currentGroup);
         }
-
-        return groups;
+    
+        return result;
     }
 
     private static String generateKdbQuery(List<RicWindow> group) {
