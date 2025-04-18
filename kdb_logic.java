@@ -31,8 +31,9 @@ public class KdbQueryGenerator {
         }
     }
 
-    private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd");
-    private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
+    // Use UTC format to avoid time skew issues
+    private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd").withZone(ZoneOffset.UTC);
+    private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneOffset.UTC);
 
     public static void main(String[] args) throws IOException {
         String csvFile = "interest_list.csv";
@@ -43,6 +44,12 @@ public class KdbQueryGenerator {
         List<Interest> interests = loadInterestList(csvFile);
         Map<String, RicWindow> ricTimeMap = calculateMinMaxTimes(interests);
         List<List<RicWindow>> chunks = groupOverlappingRics(ricTimeMap.values(), overlapWindow, maxRicsPerChunk);
+
+        // ✅ Sort groups by first RIC and then by minStart time
+        chunks.sort(Comparator
+            .comparing((List<RicWindow> g) -> g.stream().map(r -> r.ric).sorted().findFirst().orElse(""))
+            .thenComparing(g -> g.stream().map(r -> r.minStart).min(Comparator.naturalOrder()).orElse(ZonedDateTime.now()))
+        );
 
         List<String> kdbQueries = chunks.stream()
                 .map(KdbQueryGenerator::generateKdbQuery)
@@ -64,10 +71,13 @@ public class KdbQueryGenerator {
             String ric = parts[2].trim().replaceAll("\"", "");
             if (ric.isEmpty()) continue;
 
-            ZonedDateTime start = ZonedDateTime.parse(parts[5]);
-            ZonedDateTime end = ZonedDateTime.parse(parts[6]);
-
-            list.add(new Interest(ric, start, end));
+            try {
+                ZonedDateTime start = ZonedDateTime.parse(parts[5]).withZoneSameInstant(ZoneOffset.UTC);
+                ZonedDateTime end = ZonedDateTime.parse(parts[6]).withZoneSameInstant(ZoneOffset.UTC);
+                list.add(new Interest(ric, start, end));
+            } catch (DateTimeException e) {
+                System.err.println("Skipping invalid datetime row: " + line);
+            }
         }
         return list;
     }
@@ -124,24 +134,24 @@ public class KdbQueryGenerator {
         if (group == null || group.isEmpty()) {
             return "// Empty group — no KDB query generated.\n";
         }
-    
+
         ZonedDateTime minStart = group.stream().map(r -> r.minStart).min(Comparator.naturalOrder()).get();
         ZonedDateTime maxEnd = group.stream().map(r -> r.maxEnd).max(Comparator.naturalOrder()).get();
-    
+
         String ricList = group.stream()
                 .map(r -> "\"" + r.ric + "\"")
                 .collect(Collectors.joining("; ", "`$(", ")"));
-    
+
         return String.format(
             "futurePeriodTick[(`src`columns`symType`format`filters`applyTz`sDate`sTime`eDate`eTime`tz`syms)!"
           + "(`reuters;`date`sym`time`exchDate`exchTime`bidPrice1`bidPrice2`bidPrice3`bidPrice4`bidPrice5"
           + "`bidSize1`bidSize2`bidSize3`bidSize4`bidSize5`askPrice1`askPrice2`askPrice3`askPrice4`askPrice5"
           + "`askSize1`askSize2`askSize3`askSize4`askSize5`bidNo1`bidNo2`bidNo3`bidNo4`bidNo5`askNo1`askNo2`askNo3`askNo4`askNo5;"
           + "`ric;`depth;`;0b;%s;%s;%s;%s;`$\"\";%s)]",
-            minStart.format(KDB_DATE),
-            minStart.format(KDB_TIME),
-            maxEnd.format(KDB_DATE),
-            maxEnd.format(KDB_TIME),
+            KDB_DATE.format(minStart),
+            KDB_TIME.format(minStart),
+            KDB_DATE.format(maxEnd),
+            KDB_TIME.format(maxEnd),
             ricList
         );
     }
