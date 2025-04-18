@@ -121,13 +121,17 @@ public class KdbQueryGenerator {
     }
 
     private static String generateKdbQuery(List<RicWindow> group) {
+        if (group == null || group.isEmpty()) {
+            return "// Empty group — no KDB query generated.\n";
+        }
+    
         ZonedDateTime minStart = group.stream().map(r -> r.minStart).min(Comparator.naturalOrder()).get();
         ZonedDateTime maxEnd = group.stream().map(r -> r.maxEnd).max(Comparator.naturalOrder()).get();
-
+    
         String ricList = group.stream()
                 .map(r -> "\"" + r.ric + "\"")
                 .collect(Collectors.joining("; ", "`$(", ")"));
-
+    
         return String.format(
             "futurePeriodTick[(`src`columns`symType`format`filters`applyTz`sDate`sTime`eDate`eTime`tz`syms)!"
           + "(`reuters;`date`sym`time`exchDate`exchTime`bidPrice1`bidPrice2`bidPrice3`bidPrice4`bidPrice5"
