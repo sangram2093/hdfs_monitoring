@@ -20,7 +20,8 @@ query_df = spark.read.option("header", True).csv("query_output.csv") \
 
 # Broadcast join and filter
 filtered = query_df.join(broadcast(interest_df), query_df["sym"] == interest_df["RIC"]) \
-                   .filter((col("ts") >= col("start")) & (col("ts") <= col("end")))
+                   .filter((col("ts") >= col("start")) & (col("ts") <= col("end"))) \
+                   .dropDuplicates(["sym", "ts"])
 
 # Save result
 filtered.write.option("header", True).csv("filtered_output.csv")
