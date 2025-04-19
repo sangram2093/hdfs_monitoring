@@ -1,23 +1,26 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import to_timestamp, col, broadcast
+from pyspark.sql.functions import to_timestamp, col, concat_ws, broadcast
 
-spark = SparkSession.builder \
-    .appName("FilteredOutput") \
-    .config("spark.sql.shuffle.partitions", "200") \
-    .getOrCreate()
+spark = SparkSession.builder.appName("FilterByInterval").getOrCreate()
 
+# Load interest list and parse ISO format to timestamp (UTC)
 interest_df = spark.read.option("header", True).csv("interest_list.csv") \
-    .withColumn("start", to_timestamp("Execution_Start_Time")) \
-    .withColumn("end", to_timestamp("Execution_End_Time")) \
+    .withColumn("start", to_timestamp(col("Execution_Start_Time"), "yyyy-MM-dd'T'HH:mm:ss.SSSX")) \
+    .withColumn("end", to_timestamp(col("Execution_End_Time"), "yyyy-MM-dd'T'HH:mm:ss.SSSX")) \
     .select("RIC", "start", "end") \
     .cache()
 
+# Load query output and combine date + time into timestamp
 query_df = spark.read.option("header", True).csv("query_output.csv") \
-    .withColumn("ts", to_timestamp("timestamp_column")) \
-    .repartition("RIC") \
-    .select("RIC", "ts", *[col for col in spark.read.csv("query_output.csv", header=True).columns if col not in ["RIC", "timestamp_column"]])
+    .withColumn("ts", to_timestamp(
+        concat_ws(" ", col("date_column"), col("time_column")),
+        "yyyy-MM-dd HH:mm:ss.SSS"
+    )) \
+    .select("RIC", "ts", *[c for c in spark.read.option("header", True).csv("query_output.csv").columns if c not in ["RIC", "date_column", "time_column"]])
 
+# Broadcast join and filter
 filtered = query_df.join(broadcast(interest_df), on="RIC") \
                    .filter((col("ts") >= col("start")) & (col("ts") <= col("end")))
 
+# Save result
 filtered.write.option("header", True).csv("filtered_output.csv")
