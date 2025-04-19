@@ -19,7 +19,7 @@ query_df = spark.read.option("header", True).csv("query_output.csv") \
     .select("RIC", "ts", *[c for c in spark.read.option("header", True).csv("query_output.csv").columns if c not in ["RIC", "date_column", "time_column"]])
 
 # Broadcast join and filter
-filtered = query_df.join(broadcast(interest_df), on="RIC") \
+filtered = query_df.join(broadcast(interest_df), query_df["sym"] == interest_df["RIC"]) \
                    .filter((col("ts") >= col("start")) & (col("ts") <= col("end")))
 
 # Save result
