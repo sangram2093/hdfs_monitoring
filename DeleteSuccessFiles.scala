@@ -1,7 +1,7 @@
 import org.apache.hadoop.fs.{FileSystem, Path, RemoteIterator, LocatedFileStatus}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.sql.SparkSession
-import java.time.{Instant, ZoneId}
+import java.time.{Instant}
 import java.time.temporal.ChronoUnit
 
 // Initialize Spark session
@@ -22,6 +22,7 @@ def deleteOldSuccessFiles(path: Path, daysThreshold: Int): Unit = {
   val filesIterator: RemoteIterator[LocatedFileStatus] = fs.listFiles(path, true)
 
   var deletedCount = 0
+  var skippedCount = 0
 
   while (filesIterator.hasNext) {
     val fileStatus = filesIterator.next()
@@ -33,22 +34,29 @@ def deleteOldSuccessFiles(path: Path, daysThreshold: Int): Unit = {
       val ageInDays = ChronoUnit.DAYS.between(modificationTime, now)
 
       if (ageInDays >= daysThreshold) {
-        val deleted = fs.delete(filePath, false)
-        if (deleted) {
-          println(s"Deleted: $filePath (Age: $ageInDays days)")
-          deletedCount += 1
-        } else {
-          println(s"Failed to delete: $filePath")
+        try {
+          val deleted = fs.delete(filePath, false)
+          if (deleted) {
+            println(s"Deleted: $filePath (Age: $ageInDays days)")
+            deletedCount += 1
+          } else {
+            println(s"Failed to delete: $filePath (Age: $ageInDays days)")
+            skippedCount += 1
+          }
+        } catch {
+          case ex: Exception =>
+            println(s"Error deleting $filePath: ${ex.getMessage}")
+            skippedCount += 1
         }
       }
     }
   }
 
-  println(s"Cleanup complete. Total _SUCCESS files deleted: $deletedCount")
+  println(s"Cleanup complete. Total deleted: $deletedCount, Skipped due to error: $skippedCount")
 }
 
 // Run deletion logic
 deleteOldSuccessFiles(new Path(basePath), thresholdDays)
 
-// Stop Spark
+// Stop Spark session
 spark.stop()
