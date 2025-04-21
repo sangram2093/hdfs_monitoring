@@ -1,44 +1,54 @@
 import org.apache.hadoop.fs.{FileSystem, Path, RemoteIterator, LocatedFileStatus}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.sql.SparkSession
+import java.time.{Instant, ZoneId}
+import java.time.temporal.ChronoUnit
 
 // Initialize Spark session
 val spark = SparkSession.builder()
-  .appName("Delete _SUCCESS Files")
+  .appName("Delete _SUCCESS Files Older Than N Days")
   .getOrCreate()
 
-// Set the base directory path (pass via spark-submit conf or default path)
+// Get base directory and age threshold from spark conf or defaults
 val basePath = spark.conf.get("spark.cleanup.basePath", "/project/abcd")
+val thresholdDays = spark.conf.get("spark.cleanup.daysThreshold", "3").toInt
 
-println(s"Starting cleanup in base path: $basePath")
+println(s"Deleting _SUCCESS files older than $thresholdDays days under: $basePath")
 
-// Get Hadoop FileSystem
 val fs = FileSystem.get(new Configuration())
 
-// Recursive function to find and delete _SUCCESS files
-def deleteSuccessFiles(path: Path): Unit = {
+def deleteOldSuccessFiles(path: Path, daysThreshold: Int): Unit = {
+  val now = Instant.now()
   val filesIterator: RemoteIterator[LocatedFileStatus] = fs.listFiles(path, true)
 
   var deletedCount = 0
+
   while (filesIterator.hasNext) {
     val fileStatus = filesIterator.next()
     val filePath = fileStatus.getPath
-    if (filePath.getName == "_SUCCESS" && fileStatus.isFile) {
-      val deleted = fs.delete(filePath, false)
-      if (deleted) {
-        println(s"Deleted: ${filePath}")
-        deletedCount += 1
-      } else {
-        println(s"Failed to delete: ${filePath}")
+    val fileName = filePath.getName
+
+    if (fileStatus.isFile && fileName == "_SUCCESS") {
+      val modificationTime = Instant.ofEpochMilli(fileStatus.getModificationTime)
+      val ageInDays = ChronoUnit.DAYS.between(modificationTime, now)
+
+      if (ageInDays >= daysThreshold) {
+        val deleted = fs.delete(filePath, false)
+        if (deleted) {
+          println(s"Deleted: $filePath (Age: $ageInDays days)")
+          deletedCount += 1
+        } else {
+          println(s"Failed to delete: $filePath")
+        }
       }
     }
   }
 
-  println(s"Cleanup completed. Total _SUCCESS files deleted: $deletedCount")
+  println(s"Cleanup complete. Total _SUCCESS files deleted: $deletedCount")
 }
 
-// Begin cleanup
-deleteSuccessFiles(new Path(basePath))
+// Run deletion logic
+deleteOldSuccessFiles(new Path(basePath), thresholdDays)
 
 // Stop Spark
 spark.stop()
