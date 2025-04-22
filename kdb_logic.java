@@ -6,31 +6,31 @@ import java.time.temporal.ChronoField;
 import java.util.*;
 import java.util.stream.*;
 
-public class KdbQueryGeneratorFlexibleTime {
+public class KdbQueryGeneratorZoned {
 
     static class RicWindow {
         String ric;
-        LocalDateTime start;
-        LocalDateTime end;
+        ZonedDateTime start;
+        ZonedDateTime end;
 
-        public RicWindow(String ric, LocalDateTime start, LocalDateTime end) {
+        public RicWindow(String ric, ZonedDateTime start, ZonedDateTime end) {
             this.ric = ric;
             this.start = start;
             this.end = end;
         }
     }
 
-    // Formatters (no timezone)
-    private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd");
-    private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
-
-    // Flexible timestamp formatter to accept .1, .12, .123 millis
-    private static final DateTimeFormatter FLEXIBLE_TIMESTAMP_FORMAT = new DateTimeFormatterBuilder()
+    // Formatter to support timestamps like 2025-03-07T10:00:01.12Z
+    private static final DateTimeFormatter FLEXIBLE_ZONED_FORMAT = new DateTimeFormatterBuilder()
             .appendPattern("yyyy-MM-dd'T'HH:mm:ss")
             .optionalStart()
             .appendFraction(ChronoField.MILLI_OF_SECOND, 0, 3, true)
             .optionalEnd()
+            .appendPattern("X") // Accepts Z or +00:00
             .toFormatter();
+
+    private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd");
+    private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
 
     public static void main(String[] args) throws IOException {
         String csvFile = "interest_list.csv";
@@ -49,8 +49,8 @@ public class KdbQueryGeneratorFlexibleTime {
         for (RicWindow ric : ricWindows) {
             currentGroup.add(ric);
 
-            LocalDateTime groupStart = currentGroup.stream().map(r -> r.start).min(Comparator.naturalOrder()).get();
-            LocalDateTime groupEnd = currentGroup.stream().map(r -> r.end).max(Comparator.naturalOrder()).get();
+            ZonedDateTime groupStart = currentGroup.stream().map(r -> r.start).min(Comparator.naturalOrder()).get();
+            ZonedDateTime groupEnd = currentGroup.stream().map(r -> r.end).max(Comparator.naturalOrder()).get();
             Duration groupDuration = Duration.between(groupStart, groupEnd);
 
             boolean exceedsWindow = groupDuration.compareTo(maxWindow) > 0;
@@ -68,14 +68,14 @@ public class KdbQueryGeneratorFlexibleTime {
             groupedQueries.add(currentGroup);
         }
 
-        // Sort groups by first RIC and start time
+        // Sort groups by first RIC alphabetically and then by start time
         groupedQueries.sort(Comparator
                 .comparing((List<RicWindow> g) -> g.stream().map(r -> r.ric).sorted().findFirst().orElse(""))
-                .thenComparing(g -> g.stream().map(r -> r.start).min(Comparator.naturalOrder()).orElse(LocalDateTime.now()))
+                .thenComparing(g -> g.stream().map(r -> r.start).min(Comparator.naturalOrder()).orElse(ZonedDateTime.now()))
         );
 
         List<String> queries = groupedQueries.stream()
-                .map(KdbQueryGeneratorFlexibleTime::generateKdbQuery)
+                .map(KdbQueryGeneratorZoned::generateKdbQuery)
                 .collect(Collectors.toList());
 
         Files.write(Paths.get(outputFile), queries);
@@ -85,7 +85,7 @@ public class KdbQueryGeneratorFlexibleTime {
     private static List<RicWindow> loadInterestList(String file) throws IOException {
         List<RicWindow> list = new ArrayList<>();
         List<String> allLines = Files.readAllLines(Paths.get(file));
-        List<String> lines = allLines.subList(1, allLines.size()); // Skip header
+        List<String> lines = allLines.subList(1, allLines.size()); // skip header
 
         for (String line : lines) {
             String[] parts = line.split(",", -1);
@@ -95,8 +95,8 @@ public class KdbQueryGeneratorFlexibleTime {
             if (ric.isEmpty()) continue;
 
             try {
-                LocalDateTime start = LocalDateTime.parse(parts[5], FLEXIBLE_TIMESTAMP_FORMAT);
-                LocalDateTime end = LocalDateTime.parse(parts[6], FLEXIBLE_TIMESTAMP_FORMAT);
+                ZonedDateTime start = ZonedDateTime.parse(parts[5], FLEXIBLE_ZONED_FORMAT);
+                ZonedDateTime end = ZonedDateTime.parse(parts[6], FLEXIBLE_ZONED_FORMAT);
                 list.add(new RicWindow(ric, start, end));
             } catch (DateTimeException e) {
                 System.err.println("Skipping invalid row: " + line);
@@ -109,8 +109,8 @@ public class KdbQueryGeneratorFlexibleTime {
     private static String generateKdbQuery(List<RicWindow> group) {
         if (group.isEmpty()) return "";
 
-        LocalDateTime minStart = group.stream().map(r -> r.start).min(Comparator.naturalOrder()).get();
-        LocalDateTime maxEnd = group.stream().map(r -> r.end).max(Comparator.naturalOrder()).get();
+        ZonedDateTime minStart = group.stream().map(r -> r.start).min(Comparator.naturalOrder()).get();
+        ZonedDateTime maxEnd = group.stream().map(r -> r.end).max(Comparator.naturalOrder()).get();
 
         String ricList = group.stream()
                 .map(r -> "\"" + r.ric + "\"")
