@@ -1,11 +1,12 @@
 import java.io.*;
 import java.nio.file.*;
 import java.time.*;
-import java.time.format.DateTimeFormatter;
+import java.time.format.*;
+import java.time.temporal.ChronoField;
 import java.util.*;
 import java.util.stream.*;
 
-public class KdbQueryGeneratorFixedWindow {
+public class KdbQueryGeneratorFlexibleTime {
 
     static class RicWindow {
         String ric;
@@ -19,8 +20,17 @@ public class KdbQueryGeneratorFixedWindow {
         }
     }
 
+    // Formatters (no timezone)
     private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd");
     private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
+
+    // Flexible timestamp formatter to accept .1, .12, .123 millis
+    private static final DateTimeFormatter FLEXIBLE_TIMESTAMP_FORMAT = new DateTimeFormatterBuilder()
+            .appendPattern("yyyy-MM-dd'T'HH:mm:ss")
+            .optionalStart()
+            .appendFraction(ChronoField.MILLI_OF_SECOND, 0, 3, true)
+            .optionalEnd()
+            .toFormatter();
 
     public static void main(String[] args) throws IOException {
         String csvFile = "interest_list.csv";
@@ -65,7 +75,7 @@ public class KdbQueryGeneratorFixedWindow {
         );
 
         List<String> queries = groupedQueries.stream()
-                .map(KdbQueryGeneratorFixedWindow::generateKdbQuery)
+                .map(KdbQueryGeneratorFlexibleTime::generateKdbQuery)
                 .collect(Collectors.toList());
 
         Files.write(Paths.get(outputFile), queries);
@@ -75,7 +85,7 @@ public class KdbQueryGeneratorFixedWindow {
     private static List<RicWindow> loadInterestList(String file) throws IOException {
         List<RicWindow> list = new ArrayList<>();
         List<String> allLines = Files.readAllLines(Paths.get(file));
-        List<String> lines = allLines.subList(1, allLines.size()); // skip header
+        List<String> lines = allLines.subList(1, allLines.size()); // Skip header
 
         for (String line : lines) {
             String[] parts = line.split(",", -1);
@@ -85,8 +95,8 @@ public class KdbQueryGeneratorFixedWindow {
             if (ric.isEmpty()) continue;
 
             try {
-                LocalDateTime start = LocalDateTime.parse(parts[5]);
-                LocalDateTime end = LocalDateTime.parse(parts[6]);
+                LocalDateTime start = LocalDateTime.parse(parts[5], FLEXIBLE_TIMESTAMP_FORMAT);
+                LocalDateTime end = LocalDateTime.parse(parts[6], FLEXIBLE_TIMESTAMP_FORMAT);
                 list.add(new RicWindow(ric, start, end));
             } catch (DateTimeException e) {
                 System.err.println("Skipping invalid row: " + line);
