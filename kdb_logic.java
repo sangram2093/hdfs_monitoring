@@ -6,7 +6,7 @@ import java.time.temporal.ChronoField;
 import java.util.*;
 import java.util.stream.*;
 
-public class KdbQueryGeneratorZoned {
+public class KdbQueryGeneratorUTC {
 
     static class RicWindow {
         String ric;
@@ -20,17 +20,20 @@ public class KdbQueryGeneratorZoned {
         }
     }
 
-    // Formatter to support timestamps like 2025-03-07T10:00:01.12Z
+    // Formatter that supports Timestamps like: 2025-03-07T10:00:01.1Z or 2025-03-07T10:00:01.123+00:00
     private static final DateTimeFormatter FLEXIBLE_ZONED_FORMAT = new DateTimeFormatterBuilder()
             .appendPattern("yyyy-MM-dd'T'HH:mm:ss")
             .optionalStart()
             .appendFraction(ChronoField.MILLI_OF_SECOND, 0, 3, true)
             .optionalEnd()
-            .appendPattern("X") // Accepts Z or +00:00
+            .appendPattern("X") // Accepts Z or +00:00 style zones
             .toFormatter();
 
-    private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd");
-    private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
+    // Output formatters (force UTC)
+    private static final DateTimeFormatter KDB_DATE =
+            DateTimeFormatter.ofPattern("yyyy.MM.dd").withZone(ZoneOffset.UTC);
+    private static final DateTimeFormatter KDB_TIME =
+            DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneOffset.UTC);
 
     public static void main(String[] args) throws IOException {
         String csvFile = "interest_list.csv";
@@ -40,7 +43,6 @@ public class KdbQueryGeneratorZoned {
 
         List<RicWindow> ricWindows = loadInterestList(csvFile);
 
-        // Sort by start time
         ricWindows.sort(Comparator.comparing(r -> r.start));
 
         List<List<RicWindow>> groupedQueries = new ArrayList<>();
@@ -68,14 +70,14 @@ public class KdbQueryGeneratorZoned {
             groupedQueries.add(currentGroup);
         }
 
-        // Sort groups by first RIC alphabetically and then by start time
+        // Sort by first RIC and group start time
         groupedQueries.sort(Comparator
                 .comparing((List<RicWindow> g) -> g.stream().map(r -> r.ric).sorted().findFirst().orElse(""))
-                .thenComparing(g -> g.stream().map(r -> r.start).min(Comparator.naturalOrder()).orElse(ZonedDateTime.now()))
+                .thenComparing(g -> g.stream().map(r -> r.start).min(Comparator.naturalOrder()).orElse(ZonedDateTime.now(ZoneOffset.UTC)))
         );
 
         List<String> queries = groupedQueries.stream()
-                .map(KdbQueryGeneratorZoned::generateKdbQuery)
+                .map(KdbQueryGeneratorUTC::generateKdbQuery)
                 .collect(Collectors.toList());
 
         Files.write(Paths.get(outputFile), queries);
@@ -85,7 +87,7 @@ public class KdbQueryGeneratorZoned {
     private static List<RicWindow> loadInterestList(String file) throws IOException {
         List<RicWindow> list = new ArrayList<>();
         List<String> allLines = Files.readAllLines(Paths.get(file));
-        List<String> lines = allLines.subList(1, allLines.size()); // skip header
+        List<String> lines = allLines.subList(1, allLines.size()); // Skip header
 
         for (String line : lines) {
             String[] parts = line.split(",", -1);
@@ -123,10 +125,10 @@ public class KdbQueryGeneratorZoned {
           + "`bidSize1`bidSize2`bidSize3`bidSize4`bidSize5`askPrice1`askPrice2`askPrice3`askPrice4`askPrice5"
           + "`askSize1`askSize2`askSize3`askSize4`askSize5`bidNo1`bidNo2`bidNo3`bidNo4`bidNo5`askNo1`askNo2`askNo3`askNo4`askNo5;"
           + "`ric;`depth;`;0b;%s;%s;%s;%s;`$\"\";%s)]",
-            KDB_DATE.format(minStart),
-            KDB_TIME.format(minStart),
-            KDB_DATE.format(maxEnd),
-            KDB_TIME.format(maxEnd),
+            KDB_DATE.format(minStart.toInstant()),
+            KDB_TIME.format(minStart.toInstant()),
+            KDB_DATE.format(maxEnd.toInstant()),
+            KDB_TIME.format(maxEnd.toInstant()),
             ricList
         );
     }
