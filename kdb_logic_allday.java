@@ -17,7 +17,7 @@ public class KdbQueryGeneratorStreamed {
         LocalDate queryDate = LocalDate.of(2025, 3, 7);
         Duration interval = Duration.ofMinutes(5);
 
-        // Read, sort, and batch RICs
+        // Step 1: Read distinct RICs and sort
         List<String> rics = Files.readAllLines(Paths.get(csvFile)).stream()
                 .skip(1)
                 .map(line -> line.split(",", -1)[2].trim().replaceAll("\"", ""))
@@ -26,17 +26,21 @@ public class KdbQueryGeneratorStreamed {
                 .sorted()
                 .collect(Collectors.toList());
 
+        // Step 2: Chunk RICs into groups of max 20
         List<List<String>> ricBatches = new ArrayList<>();
         for (int i = 0; i < rics.size(); i += maxRicsPerQuery) {
             ricBatches.add(rics.subList(i, Math.min(i + maxRicsPerQuery, rics.size())));
         }
 
+        // Step 3: Stream queries directly to file (no heap buildup)
         try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
             for (List<String> batch : ricBatches) {
                 LocalTime current = LocalTime.MIDNIGHT;
-                while (!current.equals(LocalTime.MAX)) {
+                LocalTime dayEnd = LocalTime.MIDNIGHT.plusDays(1); // 24:00
+
+                while (current.isBefore(dayEnd)) {
                     LocalTime next = current.plus(interval);
-                    if (next.isAfter(LocalTime.MAX)) next = LocalTime.MAX;
+                    if (next.isAfter(dayEnd)) next = dayEnd;
 
                     ZonedDateTime startDateTime = ZonedDateTime.of(queryDate, current, ZoneOffset.UTC);
                     ZonedDateTime endDateTime = ZonedDateTime.of(queryDate, next, ZoneOffset.UTC);
@@ -45,13 +49,12 @@ public class KdbQueryGeneratorStreamed {
                     writer.write(query);
                     writer.newLine();
 
-                    if (next.equals(LocalTime.MAX)) break;
                     current = next;
                 }
             }
         }
 
-        System.out.println("✅ Queries written in streaming mode to: " + outputFile);
+        System.out.println("✅ KDB Queries written successfully to: " + outputFile);
     }
 
     private static String generateKdbQuery(ZonedDateTime start, ZonedDateTime end, List<String> rics) {
