@@ -5,52 +5,53 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.*;
 
-public class KdbQueryGeneratorByRicOnly {
+public class KdbQueryGeneratorStreamed {
 
-    private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd");
-    private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
+    private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd").withZone(ZoneOffset.UTC);
+    private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneOffset.UTC);
 
     public static void main(String[] args) throws IOException {
         String csvFile = "interest_list.csv";
-        String outputFile = "kdb_queries_full_day.txt";
+        String outputFile = "kdb_queries_streamed.txt";
         int maxRicsPerQuery = 20;
-        LocalDate queryDate = LocalDate.of(2025, 3, 7); // Full day to query
-        Duration interval = Duration.ofMinutes(5); // Each query covers 5 minutes
+        LocalDate queryDate = LocalDate.of(2025, 3, 7);
+        Duration interval = Duration.ofMinutes(5);
 
-        // Step 1: Read RICs and sort
+        // Read, sort, and batch RICs
         List<String> rics = Files.readAllLines(Paths.get(csvFile)).stream()
-                .skip(1) // Skip header
+                .skip(1)
                 .map(line -> line.split(",", -1)[2].trim().replaceAll("\"", ""))
                 .filter(ric -> !ric.isEmpty())
                 .distinct()
                 .sorted()
                 .collect(Collectors.toList());
 
-        // Step 2: Chunk RICs into groups of max 20
         List<List<String>> ricBatches = new ArrayList<>();
         for (int i = 0; i < rics.size(); i += maxRicsPerQuery) {
             ricBatches.add(rics.subList(i, Math.min(i + maxRicsPerQuery, rics.size())));
         }
 
-        // Step 3: For each batch, generate queries for 5-minute intervals
-        List<String> allQueries = new ArrayList<>();
-        LocalTime startTime = LocalTime.MIDNIGHT;
-        LocalTime endTime = LocalTime.of(23, 59, 59);
+        try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
+            for (List<String> batch : ricBatches) {
+                LocalTime current = LocalTime.MIDNIGHT;
+                while (!current.equals(LocalTime.MAX)) {
+                    LocalTime next = current.plus(interval);
+                    if (next.isAfter(LocalTime.MAX)) next = LocalTime.MAX;
 
-        for (List<String> batch : ricBatches) {
-            LocalTime current = startTime;
-            while (current.isBefore(endTime)) {
-                LocalTime next = current.plus(interval);
-                ZonedDateTime startDateTime = ZonedDateTime.of(queryDate, current, ZoneOffset.UTC);
-                ZonedDateTime endDateTime = ZonedDateTime.of(queryDate, next, ZoneOffset.UTC);
+                    ZonedDateTime startDateTime = ZonedDateTime.of(queryDate, current, ZoneOffset.UTC);
+                    ZonedDateTime endDateTime = ZonedDateTime.of(queryDate, next, ZoneOffset.UTC);
 
-                allQueries.add(generateKdbQuery(startDateTime, endDateTime, batch));
-                current = next;
+                    String query = generateKdbQuery(startDateTime, endDateTime, batch);
+                    writer.write(query);
+                    writer.newLine();
+
+                    if (next.equals(LocalTime.MAX)) break;
+                    current = next;
+                }
             }
         }
 
-        Files.write(Paths.get(outputFile), allQueries);
-        System.out.println("✅ Full-day KDB Queries written to: " + outputFile);
+        System.out.println("✅ Queries written in streaming mode to: " + outputFile);
     }
 
     private static String generateKdbQuery(ZonedDateTime start, ZonedDateTime end, List<String> rics) {
@@ -64,10 +65,10 @@ public class KdbQueryGeneratorByRicOnly {
           + "`bidSize1`bidSize2`bidSize3`bidSize4`bidSize5`askPrice1`askPrice2`askPrice3`askPrice4`askPrice5"
           + "`askSize1`askSize2`askSize3`askSize4`askSize5`bidNo1`bidNo2`bidNo3`bidNo4`bidNo5`askNo1`askNo2`askNo3`askNo4`askNo5;"
           + "`ric;`depth;`;0b;%s;%s;%s;%s;`$\"\";%s)]",
-            KDB_DATE.format(start),
-            KDB_TIME.format(start),
-            KDB_DATE.format(end),
-            KDB_TIME.format(end),
+            KDB_DATE.format(start.toInstant()),
+            KDB_TIME.format(start.toInstant()),
+            KDB_DATE.format(end.toInstant()),
+            KDB_TIME.format(end.toInstant()),
             ricList
         );
     }
