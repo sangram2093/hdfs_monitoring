@@ -5,19 +5,19 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.*;
 
-public class KdbQueryGeneratorStreamed {
+public class KdbQueryGenerator24H {
 
     private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd").withZone(ZoneOffset.UTC);
     private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneOffset.UTC);
 
     public static void main(String[] args) throws IOException {
-        String csvFile = "interest_list.csv";
-        String outputFile = "kdb_queries_streamed.txt";
-        int maxRicsPerQuery = 20;
-        LocalDate queryDate = LocalDate.of(2025, 3, 7);
-        Duration interval = Duration.ofMinutes(5);
+        String csvFile = "interest_list.csv";                 // Input CSV path
+        String outputFile = "kdb_queries_24h.txt";            // Output KDB queries file
+        int maxRicsPerQuery = 20;                             // RICs per query
+        LocalDate queryDate = LocalDate.of(2025, 3, 7);       // Date to generate queries for
+        Duration interval = Duration.ofMinutes(5);            // Time interval per query
 
-        // Step 1: Read distinct RICs and sort
+        // Step 1: Read distinct RICs
         List<String> rics = Files.readAllLines(Paths.get(csvFile)).stream()
                 .skip(1)
                 .map(line -> line.split(",", -1)[2].trim().replaceAll("\"", ""))
@@ -26,17 +26,17 @@ public class KdbQueryGeneratorStreamed {
                 .sorted()
                 .collect(Collectors.toList());
 
-        // Step 2: Chunk RICs into groups of max 20
+        // Step 2: Break into batches of 20 RICs each
         List<List<String>> ricBatches = new ArrayList<>();
         for (int i = 0; i < rics.size(); i += maxRicsPerQuery) {
             ricBatches.add(rics.subList(i, Math.min(i + maxRicsPerQuery, rics.size())));
         }
 
-        // Step 3: Stream queries directly to file (no heap buildup)
+        // Step 3: Stream queries to output file
         try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
             for (List<String> batch : ricBatches) {
                 LocalTime current = LocalTime.MIDNIGHT;
-                LocalTime dayEnd = LocalTime.MIDNIGHT.plusDays(1); // 24:00
+                LocalTime dayEnd = LocalTime.MIDNIGHT.plusHours(24); // 24-hour full day
 
                 while (current.isBefore(dayEnd)) {
                     LocalTime next = current.plus(interval);
@@ -54,7 +54,7 @@ public class KdbQueryGeneratorStreamed {
             }
         }
 
-        System.out.println("✅ KDB Queries written successfully to: " + outputFile);
+        System.out.println("✅ KDB Queries written for full 24-hour day to: " + outputFile);
     }
 
     private static String generateKdbQuery(ZonedDateTime start, ZonedDateTime end, List<String> rics) {
@@ -63,7 +63,7 @@ public class KdbQueryGeneratorStreamed {
                 .collect(Collectors.joining("; ", "`$(", ")"));
 
         return String.format(
-            "futurePeriodTick[(`src`columns`symType`format`filters`applyTz`sDate`sTime`eDate`eTime`tz`syms)!"
+            "futurePeriodTick[(`src`columns`symType`format`filters`applyTz`sDate`sTime`eDate`sTime`tz`syms)!"
           + "(`reuters;`date`sym`time`exchDate`exchTime`bidPrice1`bidPrice2`bidPrice3`bidPrice4`bidPrice5"
           + "`bidSize1`bidSize2`bidSize3`bidSize4`bidSize5`askPrice1`askPrice2`askPrice3`askPrice4`askPrice5"
           + "`askSize1`askSize2`askSize3`askSize4`askSize5`bidNo1`bidNo2`bidNo3`bidNo4`bidNo5`askNo1`askNo2`askNo3`askNo4`askNo5;"
