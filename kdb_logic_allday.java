@@ -1,23 +1,42 @@
 import java.io.*;
 import java.nio.file.*;
 import java.time.*;
-import java.time.format.DateTimeFormatter;
+import java.time.format.*;
 import java.util.*;
 import java.util.stream.*;
 
-public class KdbQueryGeneratorFinal {
+public class KdbQueryGeneratorDynamicDate {
 
+    private static final DateTimeFormatter ISO_TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
+            .withZone(ZoneOffset.UTC);  // Accepts partial ISO formats
     private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd").withZone(ZoneOffset.UTC);
     private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneOffset.UTC);
 
     public static void main(String[] args) throws IOException {
-        String csvFile = "interest_list.csv";                  // Input CSV path
-        String outputFile = "kdb_queries_24h.txt";             // Output file
-        int maxRicsPerQuery = 20;                              // Max RICs per query
-        LocalDate queryDate = LocalDate.of(2025, 3, 7);        // Date to query
+        String csvFile = "interest_list.csv";
+        String outputFile = "kdb_queries_dynamic_date.txt";
+        int maxRicsPerQuery = 20;
 
-        // Step 1: Read distinct RICs from column 3
-        List<String> rics = Files.readAllLines(Paths.get(csvFile)).stream()
+        List<String> allLines = Files.readAllLines(Paths.get(csvFile));
+        if (allLines.size() <= 1) {
+            System.out.println("Input file is empty or contains only header.");
+            return;
+        }
+
+        // Step 1: Extract execution date from the first valid Execution_Start_Time (column index 5)
+        LocalDate queryDate = allLines.stream()
+                .skip(1)
+                .map(line -> line.split(",", -1))
+                .filter(parts -> parts.length > 5 && !parts[5].trim().isEmpty())
+                .map(parts -> parts[5].trim().substring(0, 10))  // e.g., "2025-03-07"
+                .map(LocalDate::parse)
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("No valid Execution_Start_Time found."));
+
+        System.out.println("Using query date from file: " + queryDate);
+
+        // Step 2: Read and collect distinct RICs from column 3
+        List<String> rics = allLines.stream()
                 .skip(1)
                 .map(line -> line.split(",", -1))
                 .filter(parts -> parts.length > 2 && !parts[2].trim().isEmpty())
@@ -28,7 +47,7 @@ public class KdbQueryGeneratorFinal {
 
         System.out.println("Total unique RICs: " + rics.size());
 
-        // Step 2: Chunk RICs into batches of 20
+        // Step 3: Split RICs into batches of 20
         List<List<String>> ricBatches = new ArrayList<>();
         for (int i = 0; i < rics.size(); i += maxRicsPerQuery) {
             ricBatches.add(rics.subList(i, Math.min(i + maxRicsPerQuery, rics.size())));
@@ -36,7 +55,7 @@ public class KdbQueryGeneratorFinal {
 
         System.out.println("Total batches: " + ricBatches.size());
 
-        // Step 3: Write queries for each batch for 5-min intervals across 24h
+        // Step 4: Write queries to file
         try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
             for (List<String> batch : ricBatches) {
                 for (int minutes = 0; minutes < 1440; minutes += 5) {
@@ -53,7 +72,7 @@ public class KdbQueryGeneratorFinal {
             }
         }
 
-        System.out.println("✅ All KDB queries written successfully to " + outputFile);
+        System.out.println("✅ KDB queries successfully written to: " + outputFile);
     }
 
     private static String generateKdbQuery(ZonedDateTime start, ZonedDateTime end, List<String> rics) {
