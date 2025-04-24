@@ -5,36 +5,35 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.*;
 
-public class KdbQueryGeneratorDateRange {
+public class KdbQueryGeneratorFixedDays {
 
     private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd").withZone(ZoneOffset.UTC);
     private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneOffset.UTC);
 
     public static void main(String[] args) throws IOException {
         String csvFile = "interest_list.csv";
-        String outputFile = "kdb_queries_range.txt";
-        int maxRicsPerQuery = 20;
+        String outputFile = "kdb_queries_days_only.txt";
+        int maxRicsPerQuery = 10;
 
-        // ✅ Optional interval from args
-        int intervalMinutes = 5;
+        // ✅ Optional interval in minutes
+        int intervalMinutes = 1440; // default 24h
         if (args.length > 0) {
             try {
                 intervalMinutes = Integer.parseInt(args[0]);
                 if (intervalMinutes <= 0 || intervalMinutes > 1440)
                     throw new IllegalArgumentException("Invalid interval");
             } catch (Exception e) {
-                System.out.println("Invalid argument for interval. Using default 5 minutes.");
-                intervalMinutes = 5;
+                System.out.println("Invalid interval provided. Using default: 1440 mins.");
             }
         }
 
         List<String> allLines = Files.readAllLines(Paths.get(csvFile));
         if (allLines.size() <= 1) {
-            System.out.println("❌ Input file is empty or contains only header.");
+            System.out.println("❌ Empty or header-only file.");
             return;
         }
 
-        // ✅ Extract date range
+        // ✅ Get start and end dates
         LocalDate startDate = allLines.stream()
                 .skip(1)
                 .map(line -> line.split(",", -1))
@@ -42,7 +41,7 @@ public class KdbQueryGeneratorDateRange {
                 .map(parts -> parts[5].trim().substring(0, 10))
                 .map(LocalDate::parse)
                 .min(LocalDate::compareTo)
-                .orElseThrow(() -> new RuntimeException("No valid Execution_Start_Time found."));
+                .orElseThrow();
 
         LocalDate endDate = allLines.stream()
                 .skip(1)
@@ -51,11 +50,12 @@ public class KdbQueryGeneratorDateRange {
                 .map(parts -> parts[6].trim().substring(0, 10))
                 .map(LocalDate::parse)
                 .max(LocalDate::compareTo)
-                .orElse(startDate);  // fallback to same day if missing
+                .orElse(startDate);
 
-        System.out.println("📅 Generating queries from " + startDate + " to " + endDate);
+        System.out.println("📅 Start Date: " + startDate + " | End Date: " + endDate);
+        System.out.println("🕒 Interval: " + intervalMinutes + " minutes");
 
-        // ✅ Extract RICs
+        // ✅ Collect RICs
         List<String> rics = allLines.stream()
                 .skip(1)
                 .map(line -> line.split(",", -1))
@@ -65,34 +65,26 @@ public class KdbQueryGeneratorDateRange {
                 .sorted()
                 .collect(Collectors.toList());
 
-        System.out.println("🔍 RICs: " + rics.size());
-
         List<List<String>> ricBatches = new ArrayList<>();
         for (int i = 0; i < rics.size(); i += maxRicsPerQuery) {
             ricBatches.add(rics.subList(i, Math.min(i + maxRicsPerQuery, rics.size())));
         }
 
-        System.out.println("📦 Batches: " + ricBatches.size());
-
-        Duration interval = Duration.ofMinutes(intervalMinutes);
-
         try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
-            for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
+            for (LocalDate date : Arrays.asList(startDate, endDate)) {
                 for (List<String> batch : ricBatches) {
-                    for (int minutes = 0; minutes < 1440; minutes += intervalMinutes) {
-                        LocalTime current = LocalTime.ofSecondOfDay(minutes * 60L);
-                        ZonedDateTime startDateTime = ZonedDateTime.of(date, current, ZoneOffset.UTC);
-                        ZonedDateTime endDateTime = startDateTime.plus(interval).minusNanos(1_000_000); // -1 ms
+                    LocalTime startTime = LocalTime.MIDNIGHT;
+                    ZonedDateTime startDateTime = ZonedDateTime.of(date, startTime, ZoneOffset.UTC);
+                    ZonedDateTime endDateTime = startDateTime.plusMinutes(intervalMinutes).minusNanos(1_000_000);
 
-                        String query = generateKdbQuery(startDateTime, endDateTime, batch);
-                        writer.write(query);
-                        writer.newLine();
-                    }
+                    String query = generateKdbQuery(startDateTime, endDateTime, batch);
+                    writer.write(query);
+                    writer.newLine();
                 }
             }
         }
 
-        System.out.println("✅ Queries for full date range written to " + outputFile);
+        System.out.println("✅ KDB queries written to " + outputFile);
     }
 
     private static String generateKdbQuery(ZonedDateTime start, ZonedDateTime end, List<String> rics) {
