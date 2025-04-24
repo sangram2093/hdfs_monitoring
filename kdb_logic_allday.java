@@ -5,15 +5,31 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.*;
 
-public class KdbQueryGeneratorFinalPrecision {
+public class KdbQueryGeneratorFlexibleInterval {
 
     private static final DateTimeFormatter KDB_DATE = DateTimeFormatter.ofPattern("yyyy.MM.dd").withZone(ZoneOffset.UTC);
     private static final DateTimeFormatter KDB_TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneOffset.UTC);
 
     public static void main(String[] args) throws IOException {
         String csvFile = "interest_list.csv";
-        String outputFile = "kdb_queries_precise.txt";
+        String outputFile = "kdb_queries_flexible.txt";
         int maxRicsPerQuery = 20;
+
+        // ✅ Get interval from command-line args or fallback to default
+        int intervalMinutes = 5; // default
+        if (args.length > 0) {
+            try {
+                intervalMinutes = Integer.parseInt(args[0]);
+                if (intervalMinutes <= 0 || intervalMinutes > 1440) {
+                    throw new IllegalArgumentException("Invalid interval. Use a value between 1 and 1440.");
+                }
+            } catch (Exception e) {
+                System.out.println("Invalid argument for interval. Using default 5 minutes.");
+                intervalMinutes = 5;
+            }
+        }
+
+        System.out.println("⏱️  Generating KDB queries using interval: " + intervalMinutes + " minutes");
 
         List<String> allLines = Files.readAllLines(Paths.get(csvFile));
         if (allLines.size() <= 1) {
@@ -21,19 +37,19 @@ public class KdbQueryGeneratorFinalPrecision {
             return;
         }
 
-        // Step 1: Extract execution date from the first valid Execution_Start_Time
+        // Step 1: Extract execution date from the first valid Execution_Start_Time (col 5)
         LocalDate queryDate = allLines.stream()
                 .skip(1)
                 .map(line -> line.split(",", -1))
                 .filter(parts -> parts.length > 5 && !parts[5].trim().isEmpty())
-                .map(parts -> parts[5].trim().substring(0, 10))  // e.g., "2025-03-07"
+                .map(parts -> parts[5].trim().substring(0, 10))
                 .map(LocalDate::parse)
                 .findFirst()
                 .orElseThrow(() -> new RuntimeException("No valid Execution_Start_Time found."));
 
-        System.out.println("Using query date from file: " + queryDate);
+        System.out.println("📅 Using query date: " + queryDate);
 
-        // Step 2: Read distinct RICs
+        // Step 2: Extract distinct sorted RICs from column 3
         List<String> rics = allLines.stream()
                 .skip(1)
                 .map(line -> line.split(",", -1))
@@ -43,23 +59,25 @@ public class KdbQueryGeneratorFinalPrecision {
                 .sorted()
                 .collect(Collectors.toList());
 
-        System.out.println("Total unique RICs: " + rics.size());
+        System.out.println("🔍 Unique RICs: " + rics.size());
 
-        // Step 3: Batch into groups of 20
+        // Step 3: Chunk RICs into batches of max 20
         List<List<String>> ricBatches = new ArrayList<>();
         for (int i = 0; i < rics.size(); i += maxRicsPerQuery) {
             ricBatches.add(rics.subList(i, Math.min(i + maxRicsPerQuery, rics.size())));
         }
 
-        System.out.println("Total batches: " + ricBatches.size());
+        System.out.println("📦 Total batches: " + ricBatches.size());
 
-        // Step 4: Generate queries with precise end time (59.999ms)
+        // Step 4: Stream queries to file with dynamic interval
+        Duration interval = Duration.ofMinutes(intervalMinutes);
+
         try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile))) {
             for (List<String> batch : ricBatches) {
-                for (int minutes = 0; minutes < 1440; minutes += 5) {
+                for (int minutes = 0; minutes < 1440; minutes += intervalMinutes) {
                     LocalTime current = LocalTime.ofSecondOfDay(minutes * 60L);
                     ZonedDateTime startDateTime = ZonedDateTime.of(queryDate, current, ZoneOffset.UTC);
-                    ZonedDateTime endDateTime = startDateTime.plusMinutes(5).minusNanos(1_000_000);  // subtract 1 ms
+                    ZonedDateTime endDateTime = startDateTime.plus(interval).minusNanos(1_000_000);  // end time - 1ms
 
                     String query = generateKdbQuery(startDateTime, endDateTime, batch);
                     writer.write(query);
@@ -68,7 +86,7 @@ public class KdbQueryGeneratorFinalPrecision {
             }
         }
 
-        System.out.println("✅ KDB queries with millisecond-precision written to: " + outputFile);
+        System.out.println("✅ All queries generated in " + outputFile);
     }
 
     private static String generateKdbQuery(ZonedDateTime start, ZonedDateTime end, List<String> rics) {
