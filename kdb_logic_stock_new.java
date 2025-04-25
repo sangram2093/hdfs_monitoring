@@ -1,31 +1,26 @@
 import java.io.*;
 import java.nio.file.*;
 import java.time.*;
-import java.time.format.*;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.*;
 
-public class KdbQueryFromTemplate {
+public class KdbQueryFromColonProps {
 
     private static final String PROPERTIES_FILE = "kdb_config.properties";
     private static final String INPUT_CSV = "interest_list.csv";
     private static final String OUTPUT_FILE = "kdb_generated_queries.txt";
 
     public static void main(String[] args) throws IOException {
-        Properties props = new Properties();
-        try (InputStream input = new FileInputStream(PROPERTIES_FILE)) {
-            props.load(input);
-        }
+        Map<String, String> props = loadCustomProperties(PROPERTIES_FILE);
 
-        // ✅ Step 1: Read key config
-        String baseQueryTemplate = props.getProperty("KDB_SERVER_URL_PARAMS_1");
-        String functionName = props.getProperty("KDB_SERBER_URL_FUNCTION");
-        int paramCount = Integer.parseInt(props.getProperty("KDB_SERVER_URL_PARAMS_DYN_CNT"));
-        boolean groupRics = "Y".equalsIgnoreCase(props.getProperty("KDB_SERVER_MULTI_SYM_REQD"));
-        int maxRics = Integer.parseInt(props.getProperty("KDB_SERVER_SYM_CNT_PER_LOOP"));
-        int intervalMinutes = Integer.parseInt(props.getProperty("KDB_SERVER_MULTI_SYM_INTERVAL_PERIOD"));
+        String baseQueryTemplate = props.get("KDB_SERVER_URL_PARAMS_1");
+        String functionName = props.get("KDB_SERBER_URL_FUNCTION");
+        int paramCount = Integer.parseInt(props.get("KDB_SERVER_URL_PARAMS_DYN_CNT"));
+        boolean groupRics = "Y".equalsIgnoreCase(props.get("KDB_SERVER_MULTI_SYM_REQD"));
+        int maxRics = Integer.parseInt(props.get("KDB_SERVER_SYM_CNT_PER_LOOP"));
+        int intervalMinutes = Integer.parseInt(props.get("KDB_SERVER_MULTI_SYM_INTERVAL_PERIOD"));
 
-        // ✅ Step 2: Load CSV and determine start & end date
         List<String> allLines = Files.readAllLines(Paths.get(INPUT_CSV));
         List<String[]> data = allLines.stream().skip(1)
                 .map(line -> line.split(",", -1))
@@ -40,12 +35,11 @@ public class KdbQueryFromTemplate {
 
         LocalDate endDate = data.stream()
                 .filter(row -> row.length > 6 && !row[6].trim().isEmpty())
-                .map(row -> row[6].substring(0, 10))
+                .map(row -> row[6].trim().substring(0, 10))
                 .map(LocalDate::parse)
                 .max(LocalDate::compareTo)
                 .orElse(startDate);
 
-        // ✅ Step 3: Extract RICs
         List<String> rics = data.stream()
                 .filter(row -> row.length > 2 && !row[2].trim().isEmpty())
                 .map(row -> row[2].trim().replaceAll("\"", ""))
@@ -59,7 +53,6 @@ public class KdbQueryFromTemplate {
                         .collect(Collectors.toList())
                 : rics.stream().map(Collections::singletonList).collect(Collectors.toList());
 
-        // ✅ Step 4: Generate queries
         Duration interval = Duration.ofMinutes(intervalMinutes);
 
         try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(OUTPUT_FILE))) {
@@ -77,26 +70,41 @@ public class KdbQueryFromTemplate {
             }
         }
 
-        System.out.println("✅ KDB queries generated in " + OUTPUT_FILE);
+        System.out.println("✅ Queries written to: " + OUTPUT_FILE);
     }
 
-    private static Map<String, String> buildParamMap(ZonedDateTime start, ZonedDateTime end, List<String> rics, Properties props, int count) {
+    private static Map<String, String> loadCustomProperties(String file) throws IOException {
+        Map<String, String> map = new HashMap<>();
+        try (BufferedReader reader = Files.newBufferedReader(Paths.get(file))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty() || line.trim().startsWith("#")) continue;
+                String[] parts = line.split("::", 2);
+                if (parts.length == 2) {
+                    map.put(parts[0].trim(), parts[1].trim());
+                }
+            }
+        }
+        return map;
+    }
+
+    private static Map<String, String> buildParamMap(ZonedDateTime start, ZonedDateTime end, List<String> rics, Map<String, String> props, int count) {
         Map<String, String> map = new HashMap<>();
         for (int i = 0; i < count; i++) {
             String key = "KDB_SERVER_URL_PARAMS_VAL_" + i;
-            String type = props.getProperty(key + "_TYPE");
+            String type = props.get(key + "_TYPE");
 
             if ("SDATE".equalsIgnoreCase(type)) {
-                String format = props.getProperty(key + "_FORMAT");
+                String format = props.get(key + "_FORMAT");
                 map.put("$" + key, DateTimeFormatter.ofPattern(format).format(start.toInstant().atZone(ZoneOffset.UTC)));
             } else if ("STIME".equalsIgnoreCase(type)) {
-                String format = props.getProperty(key + "_FORMAT");
+                String format = props.get(key + "_FORMAT");
                 map.put("$" + key, DateTimeFormatter.ofPattern(format).format(start.toInstant().atZone(ZoneOffset.UTC)));
             } else if ("EDATE".equalsIgnoreCase(type)) {
-                String format = props.getProperty(key + "_FORMAT");
+                String format = props.get(key + "_FORMAT");
                 map.put("$" + key, DateTimeFormatter.ofPattern(format).format(end.toInstant().atZone(ZoneOffset.UTC)));
             } else if ("ETIME".equalsIgnoreCase(type)) {
-                String format = props.getProperty(key + "_FORMAT");
+                String format = props.get(key + "_FORMAT");
                 map.put("$" + key, DateTimeFormatter.ofPattern(format).format(end.toInstant().atZone(ZoneOffset.UTC)));
             } else if ("STRING".equalsIgnoreCase(type)) {
                 map.put("$" + key, "`$(" + rics.stream().map(r -> "\"" + r + "\"").collect(Collectors.joining("; ")) + ")");
